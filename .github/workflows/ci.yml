@@ -1,0 +1,22 @@
+name: Kiểm tra mã nguồn
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Cài thư viện
+        run: pip install -e ".[app,dev]"
+      - name: Kiểm tra định dạng và lỗi tĩnh
+        run: ruff check src app tests
+      - name: Chạy kiểm thử
+        run: pytest -q
+

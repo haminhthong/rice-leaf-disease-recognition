@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rice-leaf-disease-detection"
-version = "1.0.0"
+version = "1.1.0"
 description = "YOLOv8 object detection pipeline for bacterial leaf blight and brown spot"
 requires-python = ">=3.10"
 dependencies = [
@@ -18,14 +18,37 @@ dependencies = [
   "tqdm>=4.66",
 ]
 
+[project.optional-dependencies]
+app = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
+  "python-multipart>=0.0.9",
+  "streamlit>=1.38,<2",
+  "uvicorn[standard]>=0.30,<1",
+]
+dev = [
+  "pytest>=8,<9",
+  "ruff>=0.6,<1",
+]
+
 [project.scripts]
 rice-prepare = "rice_leaf_detection.prepare:main"
 rice-train = "rice_leaf_detection.train:main"
 rice-evaluate = "rice_leaf_detection.evaluate:main"
 rice-predict = "rice_leaf_detection.predict:main"
+rice-analyze-errors = "rice_leaf_detection.error_analysis:main"
+rice-compare = "rice_leaf_detection.compare:main"
+rice-export = "rice_leaf_detection.export:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.ruff]
 line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

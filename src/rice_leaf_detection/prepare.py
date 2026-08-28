@@ -41,7 +41,9 @@ def locate_dataset_root(directory: Path) -> Path:
             candidates.append(root)
     candidates = sorted(set(candidates), key=lambda path: len(path.parts))
     if len(candidates) != 1:
-        raise RuntimeError(f"Cần đúng một dataset YOLO trong {directory}, tìm thấy {candidates}")
+        raise RuntimeError(
+            f"Cần đúng một bộ dữ liệu YOLO trong {directory}, tìm thấy {candidates}"
+        )
     return candidates[0]
 
 
@@ -136,7 +138,7 @@ def collect_records(
                     }
                 )
     if not records:
-        raise RuntimeError("Không tìm thấy ảnh hợp lệ trong các dataset nguồn")
+        raise RuntimeError("Không tìm thấy ảnh hợp lệ trong các bộ dữ liệu nguồn")
     return records, audit
 
 
@@ -179,7 +181,8 @@ def assign_splits(records: list[Record]) -> None:
 
 def _safe_name(record: Record) -> str:
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(record["image_path"]).stem)[:90]
-    return f"{record['source']}__{stem}__{record['sha256'][:10]}{Path(record['image_path']).suffix.lower()}"
+    extension = Path(record["image_path"]).suffix.lower()
+    return f"{record['source']}__{stem}__{record['sha256'][:10]}{extension}"
 
 
 def write_dataset(
@@ -274,7 +277,9 @@ def validate_dataset(manifest: pd.DataFrame, output: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Chuẩn hóa và hợp nhất các dataset YOLO lá lúa")
+    parser = argparse.ArgumentParser(
+        description="Chuẩn hóa và hợp nhất các bộ dữ liệu YOLO lá lúa"
+    )
     parser.add_argument("--archives", nargs="+", type=Path, default=list(DEFAULT_ARCHIVES))
     parser.add_argument("--output", type=Path, default=Path("data/processed/rice_leaf_detection"))
     parser.add_argument("--extract-dir", type=Path, default=Path("data/extracted"))

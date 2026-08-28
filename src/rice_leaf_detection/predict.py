@@ -4,16 +4,18 @@ from pathlib import Path
 
 from ultralytics import YOLO
 
+from .config import load_config
 from .constants import CLASS_NAMES_VI
 from .utils import configure_utf8_console
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Dự đoán bệnh trên ảnh, thư mục hoặc video")
+    parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--weights", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
-    parser.add_argument("--conf", type=float, default=0.25)
-    parser.add_argument("--iou", type=float, default=0.45)
+    parser.add_argument("--conf", type=float)
+    parser.add_argument("--iou", type=float)
     parser.add_argument("--output", type=Path, default=Path("runs/predict"))
     parser.add_argument("--save-txt", action="store_true")
     return parser.parse_args()
@@ -22,6 +24,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     configure_utf8_console()
     args = parse_args()
+    config = load_config(args.config)
+    args.conf = (
+        args.conf if args.conf is not None else float(config["inference"]["confidence"])
+    )
+    args.iou = args.iou if args.iou is not None else float(config["inference"]["iou"])
     if not 0 <= args.conf <= 1:
         raise ValueError("--conf phải nằm trong khoảng [0, 1]")
     if not 0 <= args.iou <= 1:
@@ -49,6 +56,8 @@ def main() -> None:
     print(f"Số kết quả đã xử lý: {processed_results}")
     print(f"Số đường dẫn nguồn: {len(source_paths)}")
     print(f"Tổng số vùng phát hiện: {total_detections}")
+    if total_detections == 0:
+        print("Kết quả: chưa xác định - không có vùng bệnh đạt ngưỡng tin cậy")
     for class_id, count in sorted(counts.items()):
         class_name = CLASS_NAMES_VI.get(class_id)
         if class_name is None:

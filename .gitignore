@@ -8,11 +8,18 @@ venv/
 
 # Dữ liệu, trọng số mô hình và kết quả thí nghiệm
 data/
+!data/
+data/*
+!data/README.md
+!data/sample/
+!data/sample/.gitkeep
 datasets/
 runs/
 artifacts/
+reports/
 *.pt
 *.onnx
 *.engine
 *.zip
 *.cache
+.env

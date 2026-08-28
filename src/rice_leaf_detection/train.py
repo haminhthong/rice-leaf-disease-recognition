@@ -6,21 +6,22 @@ from pathlib import Path
 import torch
 from ultralytics import YOLO
 
-from .constants import SEED
+from .config import load_config
 from .utils import configure_utf8_console, seed_everything
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Huấn luyện YOLOv8 phát hiện bệnh lá lúa")
-    parser.add_argument("--data", type=Path, default=Path("data/processed/rice_leaf_detection/data.yaml"))
-    parser.add_argument("--model", default="yolov8s.pt")
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
+    parser.add_argument("--data", type=Path)
+    parser.add_argument("--model")
+    parser.add_argument("--epochs", type=int)
     parser.add_argument("--batch", type=int)
-    parser.add_argument("--imgsz", type=int, default=640)
-    parser.add_argument("--patience", type=int, default=25)
+    parser.add_argument("--imgsz", type=int)
+    parser.add_argument("--patience", type=int)
     parser.add_argument("--device", default=None)
-    parser.add_argument("--workers", type=int, default=2)
-    parser.add_argument("--runs-dir", type=Path, default=Path("runs/train"))
+    parser.add_argument("--workers", type=int)
+    parser.add_argument("--runs-dir", type=Path)
     parser.add_argument("--name", default=None)
     parser.add_argument("--resume", type=Path, help="Đường dẫn last.pt để resume đầy đủ")
     return parser.parse_args()
@@ -29,6 +30,27 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     configure_utf8_console()
     args = parse_args()
+    config = load_config(args.config)
+    args.data = args.data or Path(config["data"]["yaml"])
+    args.model = args.model or str(config["model"]["weights"])
+    args.epochs = (
+        args.epochs if args.epochs is not None else int(config["training"]["epochs"])
+    )
+    args.imgsz = (
+        args.imgsz if args.imgsz is not None else int(config["data"]["image_size"])
+    )
+    args.patience = (
+        args.patience
+        if args.patience is not None
+        else int(config["training"]["patience"])
+    )
+    args.workers = (
+        args.workers
+        if args.workers is not None
+        else int(config["training"]["workers"])
+    )
+    args.runs_dir = args.runs_dir or Path(config["project"]["runs_dir"])
+    seed = int(config["project"]["seed"])
     if args.epochs <= 0:
         raise ValueError("--epochs phải lớn hơn 0")
     if args.batch is not None and args.batch <= 0:
@@ -40,13 +62,15 @@ def main() -> None:
     if args.workers < 0:
         raise ValueError("--workers không được âm")
 
-    seed_everything(SEED)
+    seed_everything(seed)
     device = (
         args.device
         if args.device is not None
         else ("0" if torch.cuda.is_available() else "cpu")
     )
-    batch = args.batch or (16 if torch.cuda.is_available() else 4)
+    batch = args.batch or int(
+        config["training"]["batch_gpu" if torch.cuda.is_available() else "batch_cpu"]
+    )
     if args.resume:
         if not args.resume.exists():
             raise FileNotFoundError(args.resume)
@@ -63,11 +87,11 @@ def main() -> None:
             batch=batch,
             imgsz=args.imgsz,
             device=device,
-            optimizer="AdamW",
-            lr0=0.001,
-            weight_decay=0.0005,
+            optimizer=str(config["training"]["optimizer"]),
+            lr0=float(config["training"]["learning_rate"]),
+            weight_decay=float(config["training"]["weight_decay"]),
             patience=args.patience,
-            seed=SEED,
+            seed=seed,
             deterministic=True,
             workers=args.workers,
             val=True,
@@ -83,7 +107,8 @@ def main() -> None:
         metadata = {
             "run_name": run_dir.name,
             "data_yaml": str(args.data.resolve()),
-            "seed": SEED,
+            "seed": seed,
+            "config": str(args.config.resolve()),
             "epochs_requested": args.epochs,
             "batch_size": batch,
             "image_size": args.imgsz,
