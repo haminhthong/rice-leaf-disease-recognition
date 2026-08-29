@@ -26,9 +26,9 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
     args.conf = (
-        args.conf if args.conf is not None else float(config["inference"]["confidence"])
+        args.conf if args.conf is not None else config.inference.confidence
     )
-    args.iou = args.iou if args.iou is not None else float(config["inference"]["iou"])
+    args.iou = args.iou if args.iou is not None else config.inference.iou
     if not 0 <= args.conf <= 1:
         raise ValueError("--conf phải nằm trong khoảng [0, 1]")
     if not 0 <= args.iou <= 1:
@@ -37,9 +37,17 @@ def main() -> None:
         if not path.exists():
             raise FileNotFoundError(path)
     model = YOLO(str(args.weights))
-    results = model.predict(source=str(args.source), conf=args.conf, iou=args.iou,
-                            save=True, save_txt=args.save_txt, project=str(args.output),
-                            name="results", exist_ok=True, stream=True)
+    results = model.predict(
+        source=str(args.source),
+        conf=args.conf,
+        iou=args.iou,
+        save=True,
+        save_txt=args.save_txt,
+        project=str(args.output),
+        name="results",
+        exist_ok=True,
+        stream=True,
+    )
     counts: Counter[int] = Counter()
     total_detections = 0
     processed_results = 0

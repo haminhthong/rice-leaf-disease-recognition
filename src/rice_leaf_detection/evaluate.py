@@ -20,8 +20,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch", type=int)
     parser.add_argument("--device", default=None)
     parser.add_argument("--output", type=Path, default=Path("runs/evaluate"))
-    parser.add_argument("--confirm-final-test", action="store_true",
-                        help="Bắt buộc khi --split test để hạn chế rò rỉ dữ liệu")
+    parser.add_argument(
+        "--confirm-final-test",
+        action="store_true",
+        help="Bắt buộc khi --split test để hạn chế rò rỉ dữ liệu",
+    )
     return parser.parse_args()
 
 
@@ -29,10 +32,8 @@ def main() -> None:
     configure_utf8_console()
     args = parse_args()
     config = load_config(args.config)
-    args.data = args.data or Path(config["data"]["yaml"])
-    args.imgsz = (
-        args.imgsz if args.imgsz is not None else int(config["data"]["image_size"])
-    )
+    args.data = args.data or config.data.yaml
+    args.imgsz = args.imgsz if args.imgsz is not None else config.data.image_size
     if args.imgsz <= 0:
         raise ValueError("--imgsz phải lớn hơn 0")
     if args.batch is not None and args.batch <= 0:
@@ -50,7 +51,11 @@ def main() -> None:
         if args.device is not None
         else ("0" if torch.cuda.is_available() else "cpu")
     )
-    batch = args.batch or (16 if torch.cuda.is_available() else 4)
+    batch = args.batch or (
+        config.training.batch_gpu
+        if torch.cuda.is_available()
+        else config.training.batch_cpu
+    )
     metrics = YOLO(str(args.weights)).val(
         data=str(args.data),
         split=args.split,

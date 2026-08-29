@@ -31,26 +31,22 @@ def main() -> None:
     configure_utf8_console()
     args = parse_args()
     config = load_config(args.config)
-    args.data = args.data or Path(config["data"]["yaml"])
-    args.model = args.model or str(config["model"]["weights"])
-    args.epochs = (
-        args.epochs if args.epochs is not None else int(config["training"]["epochs"])
-    )
-    args.imgsz = (
-        args.imgsz if args.imgsz is not None else int(config["data"]["image_size"])
-    )
+    args.data = args.data or config.data.yaml
+    args.model = args.model or config.model.weights
+    args.epochs = args.epochs if args.epochs is not None else config.training.epochs
+    args.imgsz = args.imgsz if args.imgsz is not None else config.data.image_size
     args.patience = (
         args.patience
         if args.patience is not None
-        else int(config["training"]["patience"])
+        else config.training.patience
     )
     args.workers = (
         args.workers
         if args.workers is not None
-        else int(config["training"]["workers"])
+        else config.training.workers
     )
-    args.runs_dir = args.runs_dir or Path(config["project"]["runs_dir"])
-    seed = int(config["project"]["seed"])
+    args.runs_dir = args.runs_dir or config.project.runs_dir
+    seed = config.project.seed
     if args.epochs <= 0:
         raise ValueError("--epochs phải lớn hơn 0")
     if args.batch is not None and args.batch <= 0:
@@ -69,7 +65,9 @@ def main() -> None:
         else ("0" if torch.cuda.is_available() else "cpu")
     )
     batch = args.batch or int(
-        config["training"]["batch_gpu" if torch.cuda.is_available() else "batch_cpu"]
+        config.training.batch_gpu
+        if torch.cuda.is_available()
+        else config.training.batch_cpu
     )
     if args.resume:
         if not args.resume.exists():
@@ -78,7 +76,9 @@ def main() -> None:
         model.train(resume=True)
     else:
         if not args.data.exists():
-            raise FileNotFoundError(f"Không tìm thấy {args.data}. Hãy chạy bước prepare trước.")
+            raise FileNotFoundError(
+                f"Không tìm thấy {args.data}. Hãy chạy lệnh rice-prepare trước."
+            )
         run_name = args.name or f"yolov8s_{time.strftime('%Y%m%d_%H%M%S')}"
         model = YOLO(args.model)
         model.train(
@@ -87,9 +87,9 @@ def main() -> None:
             batch=batch,
             imgsz=args.imgsz,
             device=device,
-            optimizer=str(config["training"]["optimizer"]),
-            lr0=float(config["training"]["learning_rate"]),
-            weight_decay=float(config["training"]["weight_decay"]),
+            optimizer=config.training.optimizer,
+            lr0=config.training.learning_rate,
+            weight_decay=config.training.weight_decay,
             patience=args.patience,
             seed=seed,
             deterministic=True,
