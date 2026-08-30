@@ -24,3 +24,14 @@ def test_tu_choi_gia_tri_cau_hinh_khong_hop_le(tmp_path: Path) -> None:
     path.write_text(content.replace("image_size: 640", "image_size: 0"), encoding="utf-8")
     with pytest.raises(ValueError, match="data.image_size"):
         load_config(path)
+
+
+def test_tu_choi_trong_so_mo_hinh_null(tmp_path: Path) -> None:
+    content = Path("configs/default.yaml").read_text(encoding="utf-8")
+    path = tmp_path / "sai.yaml"
+    path.write_text(
+        content.replace("weights: yolov8s.pt", "weights:"),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="model.weights"):
+        load_config(path)

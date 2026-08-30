@@ -1,3 +1,14 @@
+"""Pipeline xử lý, hợp nhất và kiểm toán bộ dữ liệu lá lúa (Data Engineering & Audit Pipeline).
+
+Pipeline bao gồm các công đoạn:
+1. Giải nén an toàn file ZIP nén dữ liệu nguồn và tự động phát hiện cấu trúc dataset YOLO.
+2. Kiểm tra tính hợp lệ của ảnh và nhãn, lưu trữ các lỗi vào báo cáo audit_report.json.
+3. Loại bỏ ảnh trùng lặp SHA-256 và nhóm ảnh gần giống (pHash qua BK-Tree).
+4. Thực hiện Group-aware Stratified Split chia tập Train/Val/Test chống rò rỉ dữ liệu.
+5. Ghi tập dữ liệu sạch, manifest.csv, audit_report.json và data.yaml an toàn.
+"""
+
+
 import argparse
 import re
 import shutil
@@ -25,6 +36,7 @@ from .utils import (
 
 Record = dict[str, Any]
 AuditReport = dict[str, Any]
+
 
 
 def locate_dataset_root(directory: Path) -> Path:

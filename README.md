@@ -1,278 +1,263 @@
-# Phát hiện bệnh trên lá lúa bằng YOLOv8
+# 🌾 Nhận Diện Bệnh Lá Lúa (Rice Leaf Disease Recognition)
 
-Hệ thống computer vision phát hiện và định vị hai bệnh phổ biến trên lá lúa trong ảnh:
+![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)
+![YOLOv8](https://img.shields.io/badge/YOLO-v8.3.220-green?logo=ultralytics)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.38-FF4B4B?logo=streamlit)
+![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)
+![License MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-- **Bacterial Leaf Blight** — bạc lá lúa.
-- **Brown Spot** — đốm nâu.
+Hệ thống Computer Vision & MLOps end-to-end phát hiện và định vị hai loại bệnh hại nguy hiểm trên lá lúa bằng mô hình **YOLOv8**:
 
-Dự án sử dụng **YOLOv8s Object Detection**, trả về đồng thời loại bệnh, độ tin cậy và bounding box của vùng bệnh. Source code được tái cấu trúc từ notebook nghiên cứu thành pipeline chạy độc lập, có CLI cho toàn bộ vòng đời dữ liệu và mô hình.
+- 🌾 **Bacterial Leaf Blight (Bạc lá lúa)** - Bệnh do vi khuẩn *Xanthomonas oryzae* gây nên.
+- 🍂 **Brown Spot (Đốm nâu)** - Bệnh do nấm *Bipolaris oryzae* gây ra.
 
-> Đây là dự án hỗ trợ sàng lọc hình ảnh, không thay thế chẩn đoán của chuyên gia nông nghiệp.
+Dự án được xây dựng theo tiêu chuẩn MLOps doanh nghiệp: kiểm toán dữ liệu đa nguồn, loại bỏ trùng lặp bằng **pHash + BK-Tree**, phân chia dữ liệu theo **Group-aware Split** triệt tiêu data leakage, đánh giá mô hình khách quan với **Validation-only Model Selection**, tích hợp REST API **FastAPI**, giao diện Web **Streamlit Dashboard**, container **Docker** và xuất mô hình đa nền tảng (**ONNX, OpenVINO, TorchScript**).
 
-## Điểm nổi bật
+---
 
-- Hợp nhất hai bộ dữ liệu YOLO có taxonomy khác nhau về hai lớp mục tiêu thống nhất.
-- Chuyển annotation polygon thành bounding box và kiểm tra tọa độ/định dạng nhãn.
-- Giữ ảnh lá khỏe hoặc bệnh ngoài phạm vi làm **negative samples**, giúp giảm false positive.
-- Loại ảnh trùng tuyệt đối bằng SHA-256; nhóm ảnh gần trùng bằng perceptual hash và BK-tree.
-- Chia train/validation/test theo nhóm ảnh liên quan để hạn chế **data leakage**.
-- Ghi `manifest.csv` và `audit_report.json` để truy vết nguồn và chất lượng dữ liệu.
-- Cố định seed, phiên bản Ultralytics và cấu hình huấn luyện để tăng khả năng tái lập.
-- Khóa đánh giá test bằng cờ xác nhận, tránh dùng test set trong quá trình tuning.
-- Hỗ trợ dự đoán ảnh, thư mục ảnh và video bằng command line.
+## 🎯 Vì Sao Dự Án Này Đáng Chú Ý Trên Portfolio CV?
 
-## Kiến trúc pipeline
+Trong thực tế xây dựng ứng dụng Computer Vision từ dữ liệu công khai, thách thức lớn nhất không nằm ở câu lệnh `model.train()` mà nằm ở **chất lượng dữ liệu và giao thức kiểm thử**:
+
+1. **Rò rỉ dữ liệu (Data Leakage) nghiêm trọng**: Các bộ dữ liệu công khai (như Roboflow, Kaggle) thường chứa ảnh augment hoặc ảnh được cắt từ cùng một bức ảnh gốc. Nếu chia ngẫu nhiên từng file, ảnh gốc sẽ nằm ở tập Train còn ảnh augment nằm ở tập Test, khiến mAP cao giả tạo (~99%) nhưng mô hình thất bại khi triển khai thực tế.
+2. **Nhiễu gán nhãn & đa định dạng (Taxonomy & Annotation Noise)**: Mỗi nguồn dữ liệu định nghĩa tên lớp khác nhau và sử dụng định dạng nhãn khác nhau (Bounding Box vs. Polygon).
+
+### 💡 Giải Pháp Triển Khai Trong Pipeline
+
+- **Taxonomy Normalization**: Đọc trực tiếp `data.yaml` của từng nguồn, chuẩn hóa alias tên lớp về hai lớp mục tiêu chuẩn.
+- **Polygon to Box Conversion**: Tự động chuyển đổi các nét vẽ Polygon thành Bounding Box (Bounding Envelope) chuẩn YOLO `[x_center, y_center, width, height]`.
+- **Exact Deduplication (SHA-256)**: Loại bỏ các file ảnh trùng lặp tuyệt đối bằng thuật toán SHA-256.
+- **Near-Duplicate Grouping (pHash + BK-Tree + Union-Find)**: Trích xuất Perceptual Hash 64-bit qua biến đổi Cosin rời rạc (DCT-II), xây dựng cây **BK-Tree** để truy vấn khoảng cách Hamming trong thời gian $O(\log N)$, và hợp nhất các ảnh cùng nguồn gốc thành một `group_id` bằng **Union-Find**.
+- **Group-aware Stratified Split**: Phân chia tập dữ liệu Train (70%), Val (15%), Test (15%) theo `group_id`, đảm bảo ảnh gốc và biến thể của nó nằm gọn trong cùng một tập dữ liệu.
+- **Locked Test Set Protocol**: Khóa tập Test bằng cờ `--confirm-final-test`. Mô hình chỉ được chọn dựa trên Validation mAP50-95.
+
+---
+
+## 🏗️ Kiến Trúc Hệ Thống (System Architecture)
 
 ```text
-Hai dataset ZIP
+Hai dataset ZIP nén nguồn
       │
       ▼
-Giải nén an toàn → Chuẩn hóa taxonomy/annotation → Kiểm tra ảnh và nhãn
+Giải nén an toàn ──► Đọc taxonomy ──► Chuẩn hóa Polygon/BBox
       │
       ▼
-SHA-256 dedup → pHash grouping → Group-aware train/val/test split
+Kiểm tra ảnh/nhãn ──► SHA-256 dedup ──► pHash BK-Tree grouping
       │
       ▼
-Dataset YOLO sạch → Train YOLOv8s → Validation → Final test → Inference
+Group-aware split ──► Dataset YOLO sạch + manifest + audit report
+      │
+      ├──► YOLOv8n baseline ──┐
+      └──► YOLOv8s candidate ─┴──► Chọn mô hình bằng Validation mAP50-95
+                                      │
+                                      ▼
+                     Error analysis ──► Final Test một lần duy nhất
+                                      │
+                    ┌─────────────────┼──────────────────┐
+                    ▼                 ▼                  ▼
+             CLI/FastAPI API      Streamlit       ONNX/OpenVINO
 ```
 
-## Cấu trúc dự án
+---
+
+## 📐 Công Thức Toán Học & Metrics Đánh Giá
+
+Pipeline tính toán chính xác các độ đo chuẩn mực của Object Detection:
+
+### 1. Intersection over Union (IoU)
+$$\text{IoU}(B_{pred}, B_{gt}) = \frac{\text{Area}(B_{pred} \cap B_{gt})}{\text{Area}(B_{pred} \cup B_{gt})}$$
+
+### 2. Precision & Recall
+$$P = \frac{TP}{TP + FP}, \quad R = \frac{TP}{TP + FN}$$
+
+### 3. Mean Average Precision (mAP)
+$$\text{AP} = \int_{0}^{1} P(R) \, dR, \quad \text{mAP50-95} = \frac{1}{N_{classes}} \sum_{c=1}^{N_{classes}} \text{mAP}_{c} \ @ \ \text{IoU} \in [0.50:0.05:0.95]$$
+
+---
+
+## 📁 Cấu Trúc Repository
 
 ```text
 .
+├── .github/workflows/ci.yml       # Automated CI Gate (Ruff & Pytest)
+├── app/
+│   ├── api.py                     # RESTful FastAPI (Health, Info, Predict)
+│   └── dashboard.py               # Streamlit Multi-Tab Dashboard
+├── configs/
+│   ├── default.yaml               # Cấu hình mặc định
+│   ├── yolov8n_baseline.yaml      # Cấu hình YOLOv8n baseline
+│   └── yolov8s_champion.yaml      # Cấu hình YOLOv8s candidate
+├── data/
+│   ├── README.md                  # Data Card chi tiết
+│   └── sample/                    # Ảnh mẫu thử nghiệm nhanh
+├── scripts/
+│   └── create_demo_assets.py      # Script sinh dữ liệu mẫu giả định (Demo Quickstart)
 ├── src/rice_leaf_detection/
-│   ├── annotations.py       # Chuẩn hóa class và annotation
-│   ├── constants.py         # Taxonomy và cấu hình mặc định
-│   ├── deduplication.py     # SHA-256, BK-tree và Union-Find
-│   ├── prepare.py           # Xây dựng dataset sạch
-│   ├── train.py             # Huấn luyện/resume YOLOv8
-│   ├── evaluate.py          # Đánh giá val/test và xuất metrics
-│   ├── predict.py           # Inference ảnh/video
-│   └── utils.py
-├── tests/                   # Unit tests cho logic annotation
-├── requirements.txt
-├── pyproject.toml
-└── README.md
+│   ├── annotations.py             # Chuẩn hóa nhãn & Polygon -> BBox
+│   ├── compare.py                 # Xếp hạng mô hình theo Validation set
+│   ├── config.py                  # Dataclass cấu hình bất biến & Validation
+│   ├── constants.py               # Taxonomy & hằng số hệ thống
+│   ├── deduplication.py           # Thuật toán BK-Tree & Union-Find pHash
+│   ├── error_analysis.py          # Phân tích lỗi TP/FP/FN & Negative samples
+│   ├── evaluate.py                # Đánh giá metric Val / Test
+│   ├── export.py                  # Xuất mô hình ONNX/OpenVINO/TorchScript
+│   ├── inference.py               # Class suy luận dùng chung RiceLeafDetector
+│   ├── predict.py                 # CLI dự đoán ảnh, thư mục, video
+│   ├── prepare.py                 # Pipeline xử lý dữ liệu end-to-end
+│   ├── train.py                   # Pipeline huấn luyện YOLOv8
+│   └── utils.py                   # Tiện ích mã hóa pHash, SHA-256, Zip an toàn
+├── tests/                         # Test Suite bao phủ 22 test cases
+├── Dockerfile                     # Docker container có Healthcheck
+├── MODEL_CARD.md                  # Model Card chi tiết
+├── pyproject.toml                 # Package setup & cấu hình tools
+└── requirements.txt               # Thư viện phụ thuộc
 ```
 
-Hai tệp dữ liệu gốc đặt ở thư mục gốc nhưng được bỏ qua khi commit Git:
+---
 
-```text
-RiceLeafAnnotatedDataset.zip
-dataset1.zip
-```
+## 🚀 Hướng Dẫn Nhanh (Quick Start)
 
-## Công nghệ sử dụng
+### 1. Cài Đặt Môi Trường
 
-- Python 3.10+
-- PyTorch, Ultralytics YOLOv8
-- OpenCV, Pillow, ImageHash
-- Pandas, NumPy, scikit-learn
-- PyYAML, tqdm
+```bash
+# Clone repository
+git clone <repository-url>
+cd rice-leaf-disease-recognition
 
-## Cài đặt
-
-Khuyến nghị dùng GPU NVIDIA hỗ trợ CUDA để huấn luyện. Inference và kiểm thử pipeline vẫn chạy được trên CPU.
-
-### Windows PowerShell
-
-```powershell
+# Tạo môi trường ảo Python
 python -m venv .venv
+
+# Active môi trường ảo (Windows PowerShell)
 .\.venv\Scripts\Activate.ps1
+# Active môi trường ảo (Linux/macOS)
+# source .venv/bin/activate
+
+# Cài đặt package ở chế độ Editable kèm phụ thuộc app & dev
 python -m pip install --upgrade pip
-pip install -e .
+pip install -e ".[app,dev]"
 ```
 
-### Linux/macOS
+### 2. Sinh Dữ Liệu Demo Quickstart (Chỉ Mất 3 Giây)
+
+Bạn có thể chạy thử **toàn bộ hệ thống** ngay lập tức mà không cần tải dữ liệu nặng hàng GB:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -e .
+python scripts/create_demo_assets.py
 ```
 
-Phiên bản `ultralytics==8.3.220` được cố định theo notebook gốc. Khi cần CUDA, hãy cài bản PyTorch phù hợp với GPU theo tài liệu chính thức trước khi chạy `pip install -e .`.
+Lệnh trên sẽ tự động sinh:
+- Các ảnh mẫu lá lúa tại `data/sample/`.
+- 2 file ZIP dữ liệu mẫu `RiceLeafAnnotatedDataset.zip` và `dataset1.zip`.
 
-## 1. Chuẩn bị dữ liệu
-
-Đặt hai ZIP ở thư mục gốc rồi chạy:
+### 3. Chạy Pipeline Xử Lý & Kiểm Toán Dữ Liệu
 
 ```bash
-rice-prepare
+rice-prepare --overwrite
 ```
 
-Hoặc dùng module Python:
+Đầu ra tạo tại `data/processed/rice_leaf_detection/`:
+- `train/`, `val/`, `test/` (Ảnh và nhãn YOLO sạch).
+- `data.yaml` (Cấu hình bộ dữ liệu).
+- `manifest.csv` (Lưu vết từng bức ảnh, split, sha256, phash).
+- `audit_report.json` (Thống kê số lượng ảnh trùng bị loại, liên kết pHash).
+
+### 4. Đánh Giá & Phân Tích Lỗi
 
 ```bash
-python -m rice_leaf_detection.prepare \
-  --archives RiceLeafAnnotatedDataset.zip dataset1.zip \
-  --output data/processed/rice_leaf_detection
+# Chạy Unit Tests kiểm thử toàn bộ hệ thống
+python -m pytest
+
+# Kiểm tra Linter định dạng code
+python -m ruff check src app tests scripts
 ```
 
-Các tùy chọn quan trọng:
-
-| Tùy chọn | Mặc định | Ý nghĩa |
-|---|---:|---|
-| `--phash-distance` | `2` | Khoảng cách Hamming tối đa để nhóm ảnh gần trùng |
-| `--drop-negatives` | tắt | Loại ảnh không có hai lớp mục tiêu; thường không khuyến nghị |
-| `--overwrite` | tắt | Tạo lại dataset đầu ra đã tồn tại |
-
-Đầu ra gồm:
-
-```text
-data/processed/rice_leaf_detection/
-├── train/{images,labels}/
-├── val/{images,labels}/
-├── test/{images,labels}/
-├── data.yaml
-├── manifest.csv
-└── audit_report.json
-```
-
-`manifest.csv` lưu split, nguồn, kích thước ảnh, hash, group và số instance mỗi lớp. `audit_report.json` lưu ảnh hỏng, nhãn lỗi, file label thiếu, ảnh trùng và xung đột annotation.
-
-## 2. Huấn luyện
+### 5. Dự Đoán Ảnh Trực Tiếp Qua CLI
 
 ```bash
-rice-train \
-  --data data/processed/rice_leaf_detection/data.yaml \
-  --model yolov8s.pt \
-  --epochs 100 \
-  --batch 16 \
-  --imgsz 640
+rice-predict --weights artifacts/best.pt --source data/sample/rice_leaf.jpg
 ```
 
-Cấu hình chính kế thừa từ notebook:
+---
 
-- Optimizer: AdamW
-- Learning rate ban đầu: `0.001`
-- Weight decay: `0.0005`
-- Early stopping patience: `25`
-- Seed: `42`
-- Input size: `640 × 640`
-- Checkpoint mỗi 10 epoch
+## 🌐 Web Service & Dashboard UI
 
-Nếu không truyền `--device` và `--batch`, chương trình tự chọn GPU với batch 16; nếu chỉ có CPU, dùng batch 4.
-
-Resume một run bị gián đoạn:
+### 1. RESTful FastAPI Server
 
 ```bash
-rice-train --resume runs/train/<run-name>/weights/last.pt
+uvicorn app.api:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Resume dùng `resume=True`, khôi phục cả epoch, optimizer và learning-rate scheduler thay vì chỉ nạp lại weights.
+Các Endpoints khả dụng:
+- `GET /health`: Kiểm tra sức khỏe dịch vụ.
+- `GET /info`: Trả về thông tin mô hình, phiên bản và các lớp hỗ trợ.
+- `POST /predict`: Upload ảnh lá lúa nhận kết quả Bounding Boxes dạng JSON.
 
-## 3. Đánh giá
+Ví dụ gọi API bằng `curl`:
+```bash
+curl -X POST "http://localhost:8000/predict" -F "file=@data/sample/rice_leaf.jpg"
+```
 
-Đánh giá trên validation để lựa chọn mô hình và ngưỡng:
+### 2. Streamlit Interactive Dashboard
 
 ```bash
-rice-evaluate \
-  --weights runs/train/<run-name>/weights/best.pt \
-  --split val
+streamlit run app/dashboard.py
 ```
 
-Chỉ đánh giá test **một lần sau khi chốt mô hình**:
+Dashboard hỗ trợ 3 Tabs chuyên nghiệp:
+- 🎯 **Phân Tích Ảnh**: Upload ảnh, tùy chỉnh Confidence Threshold & IoU, xem Bounding Box trực quan.
+- 📊 **Thống Kê Dữ Liệu & Audit**: Kiểm tra báo cáo audit_report.json và manifest dữ liệu.
+- ℹ️ **Kiến Trúc & Protocol**: Xem sơ đồ pipeline MLOps và chiến lược chống rò rỉ dữ liệu.
+
+---
+
+## 🐳 Đóng Gói Docker
 
 ```bash
-rice-evaluate \
-  --weights runs/train/<run-name>/weights/best.pt \
-  --split test \
-  --confirm-final-test
+# Build Docker Image
+docker build -t rice-leaf-detection .
+
+# Chạy Docker Container
+docker run --rm -p 8000:8000 -v "${PWD}/artifacts:/app/artifacts" rice-leaf-detection
 ```
 
-Chương trình xuất `metrics.json`, `per_class_metrics.csv`, confusion matrix và các đường cong PR/F1. Các chỉ số cần báo cáo cho bài toán detection là:
+Container tích hợp sẵn Healthcheck tự động tại `http://localhost:8000/health`.
 
-- Precision
-- Recall
-- mAP@0.5
-- mAP@0.5:0.95
-- Kết quả riêng cho từng lớp
+---
 
-Không dùng “accuracy theo ảnh” thay cho các chỉ số object detection trên.
-
-## 4. Dự đoán
-
-Ảnh đơn:
+## 📦 Export Mô Hình Đa Nền Tảng
 
 ```bash
-rice-predict \
-  --weights runs/train/<run-name>/weights/best.pt \
-  --source samples/rice_leaf.jpg \
-  --conf 0.25
+# Xuất mô hình sang ONNX
+rice-export --weights artifacts/best.pt --format onnx --imgsz 640 --simplify
+
+# Xuất mô hình sang OpenVINO hoặc TorchScript
+rice-export --weights artifacts/best.pt --format openvino
 ```
 
-Thư mục ảnh hoặc video dùng cùng lệnh bằng cách đổi `--source`. Kết quả có bounding box được lưu trong `runs/predict/results/`.
+File xuất được lưu tại `artifacts/export/` kèm `metadata.json` chứa SHA-256 Checksum.
 
-```bash
-rice-predict --weights path/to/best.pt --source path/to/images --save-txt
-rice-predict --weights path/to/best.pt --source path/to/video.mp4
-```
+---
 
-`--conf 0.25` chỉ là giá trị khởi đầu. Ngưỡng triển khai nên được chọn từ PR/F1 curve trên validation set.
+## 💼 CV Highlights & Gợi Ý Trả Lời Phỏng Vấn
 
-## Kiểm thử
+### Các dòng tóm tắt đưa vào CV:
 
-```bash
-pip install pytest
-pytest -q
-```
+> **Data & MLOps Engineer**: Xây dựng pipeline YOLOv8 phát hiện bạc lá và đốm nâu trên lá lúa; xử lý đa nguồn dữ liệu, chuẩn hóa Polygon -> BBox, thiết kế thuật toán deduplication (**SHA-256 + pHash BK-Tree**) và **Group-aware Stratified Split** triệt tiêu Data Leakage giữa Train và Test.
 
-## Dữ liệu
+> **Production Deployment**: Đóng gói quy trình Computer Vision thành Python Package với CLI (`rice-prepare`, `rice-train`, `rice-predict`), REST API (**FastAPI**), Web Dashboard (**Streamlit**), **Docker** container có healthcheck và **CI Gate (GitHub Actions)** với 22 unit tests.
 
-Pipeline sử dụng hai nguồn trong notebook gốc:
+### Câu hỏi phỏng vấn chuyên sâu gợi ý:
 
-| Dataset | Quy mô mô tả trong metadata | Lớp nguồn | Ghi chú giấy phép |
-|---|---:|---:|---|
-| RiceLeafAnnotatedDataset | 3.567 ảnh | 8 | README nguồn không nêu giấy phép; cần xác minh trước khi phân phối |
-| Rice-Leaf-Disease v6 | 2.304 ảnh | 4 | CC BY 4.0, xuất từ Roboflow |
+1. **Q: Vì sao không chia train/test ngẫu nhiên từng file ảnh?**
+   - *A: Ảnh lá lúa từ các nguồn công khai thường chứa các biến thể augment hoặc crop từ cùng ảnh gốc. Chia ngẫu nhiên làm ảnh gần giống nhau xuất hiện ở cả train và test, gây Data Leakage và đẩy mAP cao giả tạo. Pipeline của tôi gom ảnh theo `group_id` bằng pHash BK-Tree rồi mới chia tập dữ liệu.*
+2. **Q: Cấu trúc BK-Tree giải quyết bài toán pHash như thế nào?**
+   - *A: So sánh pHash giữa $N$ ảnh thông qua khoảng cách Hamming tốn $O(N^2)$. BK-Tree tận dụng bất đẳng thức tam giác metric space giúp giảm độ phức tạp truy vấn khoảng cách Hamming xuống $O(\log N)$.*
+3. **Q: Vì sao tập Test bị khóa bằng cờ `--confirm-final-test`?**
+   - *A: Nếu dùng kết quả trên tập Test để điều chỉnh hyperparameter hay ngưỡng confidence, tập Test đã bị "rò rỉ" thông tin. Tập Test trong dự án chỉ được đánh giá duy nhất một lần sau khi đã chốt mô hình bằng tập Validation.*
 
-Chỉ annotation của `Bacterial Leaf Blight` và `Brown Spot` được giữ làm positive labels. Ảnh chỉ chứa các lớp còn lại được giữ với label rỗng làm negative sample. Hai ZIP và dataset sinh ra không được commit vào repository.
+---
 
-## Kết quả thí nghiệm
+## 📄 Giấy Phép (License)
 
-Notebook nguồn bắt đầu một run `YOLOv8s` trên CPU nhưng dừng trong epoch đầu, vì vậy **chưa có kết quả validation/test hoàn chỉnh để công bố**. Không nên đưa số liệu chưa chạy xong vào CV.
-
-Sau khi huấn luyện, cập nhật bảng sau từ `metrics.json`:
-
-| Split | Precision | Recall | mAP@0.5 | mAP@0.5:0.95 |
-|---|---:|---:|---:|---:|
-| Validation | TBD | TBD | TBD | TBD |
-| Test cuối cùng | TBD | TBD | TBD | TBD |
-
-Khi bổ sung kết quả, nên ghi thêm cấu hình GPU, thời gian huấn luyện, số ảnh sau dedup, số negative samples và metric từng lớp để người đọc có thể đánh giá thí nghiệm đầy đủ.
-
-## Các quyết định kỹ thuật
-
-### Vì sao đây là object detection?
-
-Ảnh có thể chứa nhiều vùng bệnh. Classification chỉ cho biết ảnh thuộc lớp nào, còn detection xác định cả loại bệnh lẫn vị trí tổn thương để trực quan hóa và hỗ trợ kiểm tra kết quả.
-
-### Vì sao chia dữ liệu lại theo group?
-
-Hai dataset có thể chứa bản sao, ảnh đã augment hoặc nhiều export của cùng ảnh gốc. Chia ngẫu nhiên từng file có thể đưa các biến thể gần như giống nhau vào cả train và test, làm metric cao giả tạo. Pipeline nhóm các ảnh liên quan trước rồi mới chia split.
-
-### Vì sao giữ negative samples?
-
-Nếu chỉ huấn luyện trên ảnh có hai bệnh mục tiêu, mô hình dễ dự đoán nhầm lá khỏe hoặc bệnh khác thành hai lớp đã học. Label rỗng giúp mô hình học thêm tín hiệu nền và giảm false positive.
-
-## Hạn chế và hướng phát triển
-
-- Hiện chỉ hỗ trợ hai bệnh, chưa bao phủ đầy đủ bệnh và sâu hại trên lúa.
-- Chất lượng phụ thuộc vào độ chính xác và tính đa dạng của annotation nguồn.
-- Cần đánh giá thêm trên ảnh thực địa khác phân phối dữ liệu huấn luyện.
-- pHash có thể nhóm nhầm một số ảnh có bố cục gần giống; cần audit thủ công các nhóm lớn.
-- Có thể thử YOLO phiên bản mới hơn, augmentation phù hợp miền dữ liệu và model export ONNX/TensorRT.
-- Có thể xây dựng API hoặc ứng dụng web/mobile sau khi hoàn tất benchmark và hiệu chỉnh confidence.
-
-## Gợi ý mô tả trong CV
-
-> Xây dựng pipeline phát hiện bạc lá và đốm nâu trên cây lúa bằng YOLOv8; hợp nhất hai bộ dữ liệu đa taxonomy, chuẩn hóa polygon/bounding box, loại ảnh trùng bằng SHA-256 và perceptual hashing, thiết kế group-aware split chống data leakage, đồng thời tự động hóa train/evaluate/inference bằng Python CLI.
-
-Sau khi có kết quả thật, thêm một bullet định lượng, ví dụ: `Đạt mAP@0.5:0.95 = X trên test set gồm Y ảnh`.
-
-## Nguồn gốc
-
-Source code được tái cấu trúc từ notebook `Nhan_Dien_Benh_Cay_Lua.ipynb`. Notebook ban đầu tối ưu cho Google Colab/Drive; phiên bản này loại bỏ phụ thuộc Colab, thay đường dẫn cố định bằng đối số CLI và tách logic thành các module có thể kiểm thử, tái sử dụng và đưa lên GitHub.
-
+Mã nguồn dự án phát hành theo [MIT License](LICENSE).

@@ -1,3 +1,9 @@
+"""Công cụ suy luận từ giao diện dòng lệnh (CLI Prediction Tool).
+
+Cho phép người dùng thực hiện dự đoán bệnh lá lúa trên một ảnh lẻ, một thư mục chứa nhiều ảnh
+hoặc một file video truyền trực tiếp từ dòng lệnh (`rice-predict`).
+"""
+
 import argparse
 from collections import Counter
 from pathlib import Path

@@ -1,3 +1,12 @@
+"""Module xử lý và chuẩn hóa nhãn dữ liệu (Annotations Parsing & Normalization).
+
+Module này phụ trách:
+1. Chuẩn hóa tên lớp alias từ nhiều bộ dữ liệu nguồn về hai lớp chuẩn.
+2. Chuyển đổi định dạng Polygon thành YOLO Bounding Box (x_center, y_center, width, height).
+3. Kiểm tra tính hợp lệ của tọa độ ([0, 1], NaN, Inf, lệch biên) và loại bỏ nhãn trùng lặp.
+"""
+
+
 import math
 import re
 from pathlib import Path
@@ -10,6 +19,18 @@ Annotation = dict[str, int | float | str]
 
 
 def normalize_class_name(name: object) -> str | None:
+    """Chuẩn hóa tên lớp từ bộ dữ liệu gốc về tên lớp mục tiêu chuẩn.
+
+    Ví dụ:
+        - "bacterial leaf blight", "Bacterial LeafBlight" -> "Bacterial_Leaf_Blight"
+        - "brown spot", "Brown-Spot" -> "Brown_Spot"
+
+    Args:
+        name: Tên lớp nguyên bản từ data.yaml gốc.
+
+    Returns:
+        str | None: Tên lớp mục tiêu hoặc None nếu không thuộc hai bệnh cần nhận diện.
+    """
     value = re.sub(r"[^a-z0-9]+", " ", str(name).lower()).strip()
     return {
         "bacterial leaf blight": "Bacterial_Leaf_Blight",
@@ -20,6 +41,18 @@ def normalize_class_name(name: object) -> str | None:
 
 
 def build_class_map(dataset_root: Path) -> tuple[list[str], dict[int, int]]:
+    """Đọc file `data.yaml` của dataset nguồn và xây dựng bản đồ ánh xạ ID lớp gốc -> ID mục tiêu.
+
+    Args:
+        dataset_root: Đường dẫn thư mục gốc của dataset nguồn.
+
+    Returns:
+        tuple[list[str], dict[int, int]]: Danh sách tên lớp gốc và dictionary ánh xạ.
+
+
+    Raises:
+        ValueError: Nếu file data.yaml sai định dạng hoặc không chứa đủ lớp mục tiêu.
+    """
     yaml_path = dataset_root / "data.yaml"
     with yaml_path.open(encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
@@ -55,6 +88,24 @@ def parse_annotation_line(
     source: Path,
     line_no: int,
 ) -> tuple[Annotation | None, str | None]:
+    """Phân tích một dòng annotation (hỗ trợ cả định dạng YOLO BBox và YOLO Polygon).
+
+    - Nếu là BBox (5 thông số: `class x y w h`), kiểm tra tọa độ chuẩn hóa [0, 1].
+    - Nếu là Polygon (>= 7 thông số: `class x1 y1 x2 y2 ...`), tính bounding box bao quanh
+      (Bounding Envelope).
+    - Cắt bớt phần viền bị xén ngoài khung ảnh ([0, 1]).
+
+    Args:
+        line: Chuỗi văn bản đại diện 1 dòng trong file label.
+        class_map: Dictionary ánh xạ ID lớp.
+        source: Đường dẫn file nhãn nguồn (dùng cho log lỗi).
+        line_no: Số thứ tự dòng trong file (1-indexed).
+
+    Returns:
+        tuple[Annotation | None, str | None]: Dictionary chứa thông tin annotation hoặc
+        thông báo lỗi nếu không hợp lệ.
+    """
+
     parts = line.split()
     if not parts:
         return None, None
@@ -120,6 +171,18 @@ def parse_label_file(
     path: Path,
     class_map: dict[int, int],
 ) -> tuple[list[Annotation], list[str], int]:
+    """Đọc toàn bộ file nhãn `.txt`, lọc bỏ các dòng lỗi và các annotation bị trùng lặp chính xác.
+
+    Args:
+        path: Đường dẫn file `.txt` nhãn YOLO.
+        class_map: Dictionary ánh xạ ID lớp.
+
+    Returns:
+        tuple[list[Annotation], list[str], int]:
+            - Danh sách các annotation hợp lệ duy nhất.
+            - Danh sách thông báo lỗi nếu có.
+            - Số lượng dòng nhãn bị trùng lặp đã loại bỏ.
+    """
     annotations: list[Annotation] = []
     errors: list[str] = []
     if path.exists():
@@ -134,3 +197,4 @@ def parse_label_file(
         key = (ann["class_id"], *(round(ann[key], 6) for key in ("x", "y", "w", "h")))
         unique[key] = ann
     return list(unique.values()), errors, len(annotations) - len(unique)
+

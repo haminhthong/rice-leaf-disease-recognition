@@ -1,3 +1,11 @@
+"""Công cụ so sánh và đề xuất Champion Model (Validation-only Model Selection).
+
+Module này đọc file lịch sử thí nghiệm `runs/evaluate/experiments.csv`, lọc các dòng đánh giá
+trên tập xác thực (Validation Set) và xếp hạng các mô hình dựa trên metric chọn trước (`mAP50-95`).
+
+Tập Test hoàn toàn không được đưa vào bước so sánh này để chống rò rỉ dữ liệu.
+"""
+
 import argparse
 from pathlib import Path
 
@@ -5,8 +13,8 @@ import pandas as pd
 
 from .utils import configure_utf8_console
 
-
 REQUIRED_COLUMNS = {"run_name", "split", "mAP50-95", "mAP50", "recall", "precision"}
+
 
 
 def parse_args() -> argparse.Namespace:

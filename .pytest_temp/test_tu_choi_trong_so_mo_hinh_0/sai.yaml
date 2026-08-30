@@ -1,0 +1,25 @@
+project:
+  seed: 42
+  runs_dir: runs/train
+
+data:
+  yaml: data/processed/rice_leaf_detection/data.yaml
+  image_size: 640
+
+model:
+  weights:
+
+training:
+  epochs: 100
+  batch_gpu: 16
+  batch_cpu: 4
+  patience: 25
+  workers: 2
+  optimizer: AdamW
+  learning_rate: 0.001
+  weight_decay: 0.0005
+
+inference:
+  confidence: 0.25
+  iou: 0.45
+

@@ -1,3 +1,15 @@
+"""Công cụ xuất mô hình sang các định dạng triển khai thực tế (Model Export Tool).
+
+Hỗ trợ chuyển đổi trọng số huấn luyện PyTorch (`.pt`) sang các định dạng chuẩn công nghiệp:
+- ONNX (`.onnx`)
+- OpenVINO (`.xml`/`.bin`)
+- TorchScript (`.torchscript`)
+
+Mỗi lần export đều tạo file `metadata.json` lưu vết mã checksum SHA-256
+của trọng số gốc và artifact mới xuất.
+"""
+
+
 import argparse
 import json
 import shutil

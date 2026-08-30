@@ -1,3 +1,13 @@
+"""Pipeline phân tích lỗi mô hình chi tiết (Error Analysis Pipeline).
+
+Module này ghép nối (matching) giữa kết quả dự đoán (Detections) và nhãn thật (Ground Truth)
+để thống kê:
+- True Positive (TP): Dự đoán đúng lớp và có IoU >= threshold.
+- False Positive (FP): Dự đoán nhầm lớp, phát hiện nhầm background hoặc IoU < threshold.
+- False Negative (FN): Bỏ sót đối tượng bệnh thật trên ảnh.
+- Negative Sample Errors: Thống kê báo động giả trên các ảnh negative mẫu (không có bệnh).
+"""
+
 import argparse
 import json
 from collections import Counter
@@ -10,6 +20,7 @@ from .utils import configure_utf8_console
 
 Box = tuple[float, float, float, float]
 LabeledBox = tuple[int, Box, float]
+
 
 
 def box_iou(left: Box, right: Box) -> float:
