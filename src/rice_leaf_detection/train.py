@@ -47,16 +47,8 @@ def main() -> None:
     args.model = args.model or config.model.weights
     args.epochs = args.epochs if args.epochs is not None else config.training.epochs
     args.imgsz = args.imgsz if args.imgsz is not None else config.data.image_size
-    args.patience = (
-        args.patience
-        if args.patience is not None
-        else config.training.patience
-    )
-    args.workers = (
-        args.workers
-        if args.workers is not None
-        else config.training.workers
-    )
+    args.patience = args.patience if args.patience is not None else config.training.patience
+    args.workers = args.workers if args.workers is not None else config.training.workers
     args.runs_dir = args.runs_dir or config.project.runs_dir
     seed = config.project.seed
 
@@ -77,14 +69,10 @@ def main() -> None:
 
     # Tự động cấu hình GPU CUDA nếu khả dụng, ngược lại dùng CPU
     device = (
-        args.device
-        if args.device is not None
-        else ("0" if torch.cuda.is_available() else "cpu")
+        args.device if args.device is not None else ("0" if torch.cuda.is_available() else "cpu")
     )
     batch = args.batch or int(
-        config.training.batch_gpu
-        if torch.cuda.is_available()
-        else config.training.batch_cpu
+        config.training.batch_gpu if torch.cuda.is_available() else config.training.batch_cpu
     )
 
     if args.resume:
@@ -122,10 +110,40 @@ def main() -> None:
         )
 
     run_dir = Path(model.trainer.save_dir)
+    best_weights = run_dir / "weights" / "best.pt"
+    if not best_weights.exists():
+        raise FileNotFoundError(f"Quá trình huấn luyện chưa tạo {best_weights}")
+
     if not args.resume:
+        import subprocess
+        import sys
+
+        import ultralytics
+
+        from .utils import sha256_file
+
+        manifest_path = args.data.parent / "manifest.csv"
+        manifest_hash = sha256_file(manifest_path) if manifest_path.exists() else None
+        audit_path = args.data.parent / "audit_report.json"
+        audit_hash = sha256_file(audit_path) if audit_path.exists() else None
+
+        git_sha = None
+        try:
+            git_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True
+            ).strip()
+        except Exception:
+            pass
+
+        best_weights_hash = sha256_file(best_weights)
+
         metadata = {
             "run_name": run_dir.name,
             "data_yaml": str(args.data.resolve()),
+            "dataset_manifest_sha256": manifest_hash,
+            "data_audit_sha256": audit_hash,
+            "git_commit_sha": git_sha,
+            "best_weights_sha256": best_weights_hash,
             "seed": seed,
             "config": str(args.config.resolve()),
             "epochs_requested": args.epochs,
@@ -133,17 +151,16 @@ def main() -> None:
             "image_size": args.imgsz,
             "model": args.model,
             "device": str(device),
+            "python_version": sys.version,
+            "ultralytics_version": ultralytics.__version__,
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         metadata_path = run_dir / "run_metadata.json"
         metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
-    best_weights = run_dir / "weights" / "best.pt"
-    if not best_weights.exists():
-        raise FileNotFoundError(f"Quá trình huấn luyện chưa tạo {best_weights}")
     print(f"Thư mục kết quả: {run_dir.resolve()}")
     print(f"Trọng số tốt nhất: {best_weights.resolve()}")
 
 
 if __name__ == "__main__":
     main()
-

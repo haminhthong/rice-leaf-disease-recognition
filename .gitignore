@@ -1,12 +1,31 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*$py.class
+
+# Environments
 .venv/
 venv/
+ENV/
+env/
+
+# IDEs
 .idea/
 .vscode/
-.pytest_cache/
 
-# Dữ liệu, trọng số mô hình và kết quả thí nghiệm
+# Caches and build outputs
+.pytest_cache/
+.pytest_temp/
+tmp_test/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+docs/_guide_render/
+docs/*_a11y.json
+
+
+# Data, model weights, and experiment runs
 data/
 !data/
 data/*

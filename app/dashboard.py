@@ -7,6 +7,7 @@ Giao diện tương tác sinh động bao gồm 3 Tabs chính:
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -17,7 +18,21 @@ import streamlit as st
 
 from rice_leaf_detection.inference import RiceLeafDetector
 
-# Cấu hình trang Dashboard Streamlit
+logger = logging.getLogger(__name__)
+
+
+@st.cache_resource
+def load_detector(
+    weights_path: str,
+    image_size: int,
+) -> RiceLeafDetector:
+    """Tái sử dụng mô hình giữa các lần Streamlit chạy lại giao diện."""
+    return RiceLeafDetector(
+        Path(weights_path),
+        image_size=image_size,
+    )
+
+
 st.set_page_config(
     page_title="Nhận Diện Bệnh Lá Lúa | Rice Leaf Disease Recognition",
     page_icon="🌾",
@@ -32,13 +47,13 @@ st.caption(
 )
 
 
-# Sidebar cấu hình tham số
 st.sidebar.header("⚙️ Cấu Hình Mô Hình")
 weights_path_env = os.getenv("RICE_MODEL_PATH", "artifacts/best.pt")
 weights = Path(st.sidebar.text_input("Trọng số mô hình (.pt):", weights_path_env))
 
 confidence = st.sidebar.slider("Ngưỡng tin cậy (Confidence Threshold):", 0.05, 0.95, 0.25, 0.05)
 iou = st.sidebar.slider("Ngưỡng NMS IoU (IoU Threshold):", 0.10, 0.90, 0.45, 0.05)
+image_size = int(os.getenv("RICE_IMAGE_SIZE", "640"))
 
 st.sidebar.markdown("---")
 st.sidebar.info(
@@ -46,16 +61,14 @@ st.sidebar.info(
     "Kết quả không thay thế chẩn đoán chuyên môn của chuyên gia nông nghiệp."
 )
 
-# Phân chia 3 Tab giao diện chính
-tab_infer, tab_audit, tab_about = st.tabs([
-    "🎯 Phân Tích Ảnh",
-    "📊 Thống Kê Dữ Liệu & Audit",
-    "ℹ️ Kiến Trúc & Protocol",
-])
+tab_infer, tab_audit, tab_about = st.tabs(
+    [
+        "🎯 Phân Tích Ảnh",
+        "📊 Thống Kê Dữ Liệu & Audit",
+        "ℹ️ Kiến Trúc & Protocol",
+    ]
+)
 
-# ---------------------------------------------------------
-# TAB 1: PHÂN TÍCH ẢNH (INFERENCE)
-# ---------------------------------------------------------
 with tab_infer:
     col_upload, col_result = st.columns([1, 1])
 
@@ -93,13 +106,41 @@ with tab_infer:
             else:
                 with st.spinner("Đang chạy mô hình YOLOv8 phân tích..."):
                     try:
-                        detector = RiceLeafDetector(weights, confidence=confidence, iou=iou)
-                        prediction, result = detector.predict(image_np)
+                        detector = load_detector(
+                            str(weights),
+                            image_size,
+                        )
+                        prediction, result = detector.predict(
+                            image_np,
+                            confidence=confidence,
+                            iou=iou,
+                        )
 
-                        if prediction.rejected:
-                            st.warning(f"⚠️ {prediction.reason}")
+                        if prediction.status == "no_detection" or not prediction.detections:
+                            st.warning(f"⚠️ {prediction.message}")
+                            for w in prediction.warnings:
+                                st.caption(f"• {w}")
                         else:
-                            # Hiển thị ảnh kèm Bounding Box
+                            st.success(f"✅ {prediction.message}")
+
+                            if prediction.image_summary is not None:
+                                summary = prediction.image_summary
+                                col_s1, col_s2, col_s3 = st.columns(3)
+                                col_s1.metric(
+                                    "Bạc Lá Lúa (BLB)",
+                                    "Có" if summary.bacterial_leaf_blight_detected else "Không",
+                                )
+                                col_s2.metric(
+                                    "Đốm Nâu (Brown Spot)",
+                                    "Có" if summary.brown_spot_detected else "Không",
+                                )
+                                col_s3.metric("Tổng Số Tổn Thương", summary.total_detections)
+
+                                if summary.requires_human_review:
+                                    st.warning("⚠️ **Cần chuyên gia thẩm định (Review Flag):**")
+                                    for reason in summary.review_reasons:
+                                        st.markdown(f"- {reason}")
+
                             annotated_image = result.plot()
                             st.image(
                                 cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB),
@@ -110,34 +151,42 @@ with tab_infer:
                             st.markdown("#### 📋 Danh sách vùng tổn thương phát hiện:")
                             detection_rows = []
                             for idx, det in enumerate(prediction.detections, 1):
-                                detection_rows.append({
-                                    "STT": idx,
-                                    "Lớp Bệnh (Tiếng Việt)": det.class_name_vi,
-                                    "Tên Tiếng Anh": det.class_name,
-                                    "Độ Tin Cậy (Confidence)": f"{det.confidence:.1%}",
-                                    "Tọa Độ (x1, y1, x2, y2)": (
-                                        f"({det.box_xyxy[0]:.1f}, {det.box_xyxy[1]:.1f}, "
-                                        f"{det.box_xyxy[2]:.1f}, {det.box_xyxy[3]:.1f})"
-                                    ),
-                                })
+                                detection_rows.append(
+                                    {
+                                        "STT": idx,
+                                        "Lớp Bệnh (Tiếng Việt)": det.class_name_vi,
+                                        "Tên Tiếng Anh": det.class_name,
+                                        "Điểm Phát Hiện (Score)": f"{det.confidence:.1%}",
+                                        "Tọa Độ (x1, y1, x2, y2)": (
+                                            f"({det.box_xyxy[0]:.1f}, {det.box_xyxy[1]:.1f}, "
+                                            f"{det.box_xyxy[2]:.1f}, {det.box_xyxy[3]:.1f})"
+                                        ),
+                                    }
+                                )
                             st.dataframe(pd.DataFrame(detection_rows), use_container_width=True)
 
-                    except Exception as exc:
-                        st.error(f"Lỗi trong quá trình xử lý ảnh: {exc}")
+                            st.caption(
+                                "🌾 **Lưu ý chuyên môn**: Điểm số thể hiện Detection Score, "
+                                "không phải xác suất tuyệt đối. Công cụ hỗ trợ trinh sát; "
+                                "tuyệt đối không tự ý phun thuốc khi chưa có chỉ dẫn chuyên môn."
+                            )
 
-# ---------------------------------------------------------
-# TAB 2: THỐNG KÊ DỮ LIỆU & AUDIT
-# ---------------------------------------------------------
+                    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+                        st.error(f"Lỗi trong quá trình xử lý ảnh: {exc}")
+                    except Exception:
+                        logger.exception("Lỗi không mong đợi khi xử lý ảnh")
+                        st.error("Đã xảy ra lỗi không mong đợi khi xử lý ảnh.")
+
 with tab_audit:
     st.subheader("📊 Kiểm Toán Bộ Dữ Liệu (Data Audit & Manifest)")
-    
+
     processed_dir = Path("data/processed/rice_leaf_detection")
     manifest_path = processed_dir / "manifest.csv"
     audit_path = processed_dir / "audit_report.json"
 
     if manifest_path.exists():
         manifest_df = pd.read_csv(manifest_path)
-        
+
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         col_m1.metric("Tổng Số Ảnh Sạch", len(manifest_df))
         col_m2.metric("Số Ảnh Tập Train", len(manifest_df[manifest_df["split"] == "train"]))
@@ -165,7 +214,7 @@ with tab_audit:
     if audit_path.exists():
         st.markdown("#### 📄 Báo Cáo Kiểm Toán Dữ Liệu (Audit Report JSON)")
         audit_data = json.loads(audit_path.read_text(encoding="utf-8"))
-        
+
         col_a1, col_a2, col_a3 = st.columns(3)
         col_a1.metric("Ảnh Trùng SHA-256 Đã Loại", audit_data.get("exact_duplicates_removed", 0))
         col_a2.metric("Liên Kết pHash Gần Trùng", audit_data.get("near_duplicate_links", 0))
@@ -174,23 +223,20 @@ with tab_audit:
         with st.expander("🔍 Xem Toàn Bộ Audit Report JSON"):
             st.json(audit_data)
 
-# ---------------------------------------------------------
-# TAB 3: KIẾN TRÚC & PROTOCOL
-# ---------------------------------------------------------
 with tab_about:
     st.subheader("ℹ️ Kiến Trúc Hệ Thống & ML Protocol")
 
     st.markdown("""
-    ### 🛡️ Giải Pháp Chống Rò Rỉ Dữ Liệu (Anti-Data Leakage)
-    1. **Taxonomy Normalization**: Ánh xạ đa nguồn dữ liệu về 2 lớp mục tiêu chính:
+    ### 🛡️ Biện pháp giảm nguy cơ rò rỉ dữ liệu
+    1. **Chuẩn hóa phân loại**: Ánh xạ đa nguồn dữ liệu về 2 lớp mục tiêu chính:
        - **Bacterial Leaf Blight** (Bạc lá lúa)
        - **Brown Spot** (Đốm nâu)
-    2. **pHash + BK-Tree Grouping**: Nhóm các ảnh biến thể gần giống nhau (do crop/augment)
+    2. **Nhóm bằng pHash và BK-tree**: Nhóm các ảnh biến thể gần giống nhau
        vào cùng một `group_id`.
-    3. **Group-aware Stratified Split**: Phân chia tập dữ liệu Train (70%), Val (15%), Test (15%)
-       theo `group_id` nhằm đảm bảo ảnh biến thể không xuất hiện ở cả tập Train và Test.
-    4. **Val-only Selection & Test Lock**: Mô hình được lựa chọn bằng Validation set (`mAP50-95`).
-       Tập Test chỉ được mở khóa đánh giá một lần duy nhất với cờ `--confirm-final-test`.
+    3. **Chia dữ liệu theo nhóm**: Phân chia Train (70%), Validation (15%) và Test (15%)
+       theo `group_id` để giảm nguy cơ ảnh biến thể xuất hiện ở nhiều tập.
+    4. **Chọn mô hình bằng Validation**: Chỉ dùng `mAP50-95` trên Validation để chọn mô hình.
+       Tập Test được khóa bằng cờ `--confirm-final-test` cho lần đánh giá cuối.
 
 
     ### 🏗️ Sơ Đồ Pipeline Trực Quan

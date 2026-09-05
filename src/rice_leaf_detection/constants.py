@@ -7,30 +7,29 @@ seed cố định và các định dạng file ảnh được hỗ trợ.
 
 from pathlib import Path
 
-# Cố định ngẫu nhiên seed để đảm bảo tính tái lập (reproducibility)
+# Hạt giống ngẫu nhiên dùng chung để các lần chạy có thể tái lập.
 SEED: int = 42
 
-# Danh sách tên các lớp bệnh mục tiêu (Chuẩn tiếng Anh trong YOLO dataset)
+# Tên lớp theo định dạng nhãn YOLO.
 CLASS_NAMES: list[str] = ["Bacterial_Leaf_Blight", "Brown_Spot"]
 
-# Ánh xạ tên lớp mục tiêu sang Tiếng Việt hiển thị trên API / Web Dashboard
+# Tên tiếng Việt dùng khi hiển thị trên API và giao diện.
 CLASS_NAMES_VI: dict[int, str] = {
     0: "Bạc lá lúa",
     1: "Đốm nâu",
 }
 
-# Các định dạng ảnh hợp lệ được xử lý trong pipeline
+# Các phần mở rộng ảnh được pipeline dữ liệu chấp nhận.
 IMAGE_EXTENSIONS: set[str] = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
-# Các phân tập dữ liệu chuẩn
+# Tên ba tập dữ liệu của thí nghiệm.
 SPLITS: tuple[str, str, str] = ("train", "val", "test")
 
-# Tỷ lệ phân chia tập dữ liệu chuẩn (70% train, 15% val, 15% test)
+# Tỷ lệ mục tiêu; số lượng thực tế còn phụ thuộc vào các nhóm ảnh độc lập.
 SPLIT_RATIOS: dict[str, float] = {"train": 0.70, "val": 0.15, "test": 0.15}
 
-# Danh sách tên các file ZIP nén dữ liệu nguồn mặc định
+# Hai tệp dữ liệu nguồn được dùng khi không truyền --archives.
 DEFAULT_ARCHIVES: tuple[Path, Path] = (
     Path("RiceLeafAnnotatedDataset.zip"),
     Path("dataset1.zip"),
 )
-

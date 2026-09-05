@@ -1,1 +1,0 @@
-rice_leaf_detection

@@ -22,7 +22,6 @@ Box = tuple[float, float, float, float]
 LabeledBox = tuple[int, Box, float]
 
 
-
 def box_iou(left: Box, right: Box) -> float:
     """Tính IoU của hai bounding box ở định dạng x1, y1, x2, y2."""
     x1 = max(left[0], right[0])
@@ -36,12 +35,33 @@ def box_iou(left: Box, right: Box) -> float:
     return intersection / union if union > 0 else 0.0
 
 
+def classify_lesion_size(box: Box, width: int, height: int) -> str:
+    """Phân loại kích thước tổn thương dựa trên tỷ lệ diện tích box so với diện tích ảnh."""
+    if width <= 0 or height <= 0:
+        return "medium"
+    area_fraction = ((box[2] - box[0]) * (box[3] - box[1])) / (width * height)
+    if area_fraction < 0.05:
+        return "small"
+    elif area_fraction <= 0.20:
+        return "medium"
+    return "large"
+
+
 def match_detections(
     ground_truth: list[LabeledBox],
     predictions: list[LabeledBox],
     iou_threshold: float = 0.5,
 ) -> tuple[list[dict[str, Any]], Counter]:
-    """Ghép kết quả dự đoán với nhãn thật cùng lớp theo độ tin cậy giảm dần."""
+    """Ghép kết quả dự đoán với nhãn thật theo độ tin cậy giảm dần và phân loại chi tiết lỗi.
+
+    Error Taxonomy:
+    - true_positive: Dự đoán đúng lớp và IoU >= iou_threshold.
+    - false_negative: Bỏ sót tổn thương thật (Missed lesion).
+    - false_positive_background: Dự đoán vào nền/lá không có bệnh (IoU < 0.1).
+    - localization_error: Dự đoán đúng lớp nhưng IoU không đạt ngưỡng [0.1, iou_threshold).
+    - classification_confusion: Dự đoán đè lên vùng bệnh khác lớp (BLB <-> Brown Spot).
+    - duplicate_detection: Nhiều box dự đoán đè lên cùng một tổn thương thật.
+    """
     if not 0 < iou_threshold <= 1:
         raise ValueError("Ngưỡng IoU phải nằm trong khoảng (0, 1]")
     matched_ground_truth: set[int] = set()
@@ -51,25 +71,77 @@ def match_detections(
     for class_id, predicted_box, confidence in sorted(
         predictions, key=lambda item: item[2], reverse=True
     ):
-        candidates = [
+        # 1. Tìm ứng viên tốt nhất cùng lớp
+        same_class_candidates = [
             (index, box_iou(predicted_box, true_box))
             for index, (true_class, true_box, _) in enumerate(ground_truth)
-            if true_class == class_id and index not in matched_ground_truth
+            if true_class == class_id
         ]
-        best_index, best_iou = max(candidates, key=lambda item: item[1], default=(-1, 0.0))
-        if best_iou >= iou_threshold:
-            matched_ground_truth.add(best_index)
-            counts["true_positive"] += 1
+        best_same_idx, best_same_iou = max(
+            same_class_candidates, key=lambda item: item[1], default=(-1, 0.0)
+        )
+
+        # 2. Tìm ứng viên tốt nhất trên mọi lớp (để phát hiện nhầm lớp)
+        all_candidates = [
+            (index, box_iou(predicted_box, true_box), true_class)
+            for index, (true_class, true_box, _) in enumerate(ground_truth)
+        ]
+        _, best_any_iou, best_any_class = max(
+            all_candidates, key=lambda item: item[1], default=(-1, 0.0, -1)
+        )
+
+        if best_same_iou >= iou_threshold:
+            if best_same_idx not in matched_ground_truth:
+                matched_ground_truth.add(best_same_idx)
+                counts["true_positive"] += 1
+            else:
+                counts["false_positive"] += 1
+                counts["duplicate_detection"] += 1
+                errors.append(
+                    {
+                        "error_type": "false_positive",
+                        "detailed_error_type": "duplicate_detection",
+                        "class_id": class_id,
+                        "confidence": confidence,
+                        "best_iou": best_same_iou,
+                    }
+                )
         else:
             counts["false_positive"] += 1
-            errors.append(
-                {
-                    "error_type": "false_positive",
-                    "class_id": class_id,
-                    "confidence": confidence,
-                    "best_iou": best_iou,
-                }
-            )
+            if best_any_iou >= iou_threshold and best_any_class != class_id:
+                counts["classification_confusion"] += 1
+                errors.append(
+                    {
+                        "error_type": "false_positive",
+                        "detailed_error_type": "classification_confusion",
+                        "class_id": class_id,
+                        "true_class": best_any_class,
+                        "confidence": confidence,
+                        "best_iou": best_any_iou,
+                    }
+                )
+            elif 0.1 <= best_same_iou < iou_threshold:
+                counts["localization_error"] += 1
+                errors.append(
+                    {
+                        "error_type": "false_positive",
+                        "detailed_error_type": "localization_error",
+                        "class_id": class_id,
+                        "confidence": confidence,
+                        "best_iou": best_same_iou,
+                    }
+                )
+            else:
+                counts["false_positive_background"] += 1
+                errors.append(
+                    {
+                        "error_type": "false_positive",
+                        "detailed_error_type": "false_positive_background",
+                        "class_id": class_id,
+                        "confidence": confidence,
+                        "best_iou": best_same_iou,
+                    }
+                )
 
     for index, (class_id, _, _) in enumerate(ground_truth):
         if index not in matched_ground_truth:
@@ -77,9 +149,11 @@ def match_detections(
             errors.append(
                 {
                     "error_type": "false_negative",
+                    "detailed_error_type": "false_negative_missed_lesion",
                     "class_id": class_id,
                     "confidence": None,
                     "best_iou": None,
+                    "gt_index": index,
                 }
             )
     return errors, counts
@@ -149,6 +223,9 @@ def main() -> None:
     rows: list[dict[str, Any]] = []
     totals: Counter[str] = Counter()
 
+    lesion_size_totals = {"small": 0, "medium": 0, "large": 0}
+    lesion_size_recalled = {"small": 0, "medium": 0, "large": 0}
+
     for record in manifest.itertuples(index=False):
         image_path = args.dataset / record.output_image
         label_path = args.dataset / args.split / "labels" / f"{image_path.stem}.txt"
@@ -166,6 +243,15 @@ def main() -> None:
         ]
         image_errors, counts = match_detections(truth, predictions, args.iou)
         totals.update(counts)
+
+        # Tính toán phân nhóm kích thước tổn thương và tỷ lệ recall
+        unmatched_indices = {e["gt_index"] for e in image_errors if "gt_index" in e}
+        for gt_idx, (_, gt_box, _) in enumerate(truth):
+            size_cat = classify_lesion_size(gt_box, int(record.width), int(record.height))
+            lesion_size_totals[size_cat] += 1
+            if gt_idx not in unmatched_indices:
+                lesion_size_recalled[size_cat] += 1
+
         for error in image_errors:
             rows.append(
                 {
@@ -186,13 +272,44 @@ def main() -> None:
         negative_false_positives = int(
             errors.loc[negative_mask & false_positive_mask, "image"].nunique()
         )
+
+    total_negatives = int(manifest["is_negative"].astype(str).str.lower().eq("true").sum())
+    negative_fp_rate = (
+        round(negative_false_positives / total_negatives, 4) if total_negatives > 0 else 0.0
+    )
+
+    error_taxonomy = {
+        "false_negative_missed_lesion": totals.get("false_negative", 0),
+        "false_positive_background": totals.get("false_positive_background", 0),
+        "localization_low_iou": totals.get("localization_error", 0),
+        "classification_confusion": totals.get("classification_confusion", 0),
+        "duplicate_detection": totals.get("duplicate_detection", 0),
+    }
+
+    lesion_size_recall = {
+        cat: {
+            "total": lesion_size_totals[cat],
+            "recalled": lesion_size_recalled[cat],
+            "recall": (
+                round(lesion_size_recalled[cat] / lesion_size_totals[cat], 4)
+                if lesion_size_totals[cat] > 0
+                else None
+            ),
+        }
+        for cat in ("small", "medium", "large")
+    }
+
     summary = {
         "split": args.split,
         "confidence": args.confidence,
         "iou_threshold": args.iou,
         **totals,
         "images": len(manifest),
+        "negative_images_total": total_negatives,
         "negative_images_with_false_positive": negative_false_positives,
+        "negative_image_false_positive_rate": negative_fp_rate,
+        "error_taxonomy": error_taxonomy,
+        "lesion_size_recall": lesion_size_recall,
     }
     (args.output / f"{args.split}_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"

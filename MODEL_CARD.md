@@ -1,48 +1,69 @@
-# Model Card - Rice Leaf Disease Detection
+# Model Card - Rice Leaf Disease Detection Platform
 
-## Mục tiêu
+## 1. Phạm Vi Bài Toán & Định Vị (Scope & Positioning)
 
-Phát hiện và định vị hai loại tổn thương trên lá lúa: bạc lá và đốm nâu. Mô hình là công cụ hỗ trợ quan sát ảnh, không phải hệ thống chẩn đoán nông nghiệp.
+Mô hình là **công cụ hỗ trợ trinh sát thực địa và sàng lọc ban đầu (Field Scouting Decision Support)** thực hiện nhiệm vụ **Object Detection / Symptom Localization** nhằm phát hiện và khoanh vùng tổn thương trên ảnh lá lúa đơn lẻ bằng kiến trúc YOLOv8:
+- **Bacterial Leaf Blight (Bạc lá lúa)** - Vi khuẩn *Xanthomonas oryzae*
+- **Brown Spot (Đốm nâu)** - Nấm *Bipolaris oryzae*
 
-## Phiên bản được công bố
+> [!IMPORTANT]
+> - Mô hình **KHÔNG** chẩn đoán tự động toàn bộ bệnh trên cây lúa.
+> - Kết quả **KHÔNG** khẳng định lá khỏe mạnh (các tổn thương có thể thuộc bệnh ngoài phạm vi hỗ trợ).
+> - Mô hình **TUYỆT ĐỐI KHÔNG** đưa ra khuyến cáo hoặc kê đơn thuốc/hóa chất bảo vệ thực vật tự động. Mọi quyết định xử lý thực địa phải có ý kiến trực tiếp của chuyên gia/kỹ sư nông nghiệp.
 
-Chưa có champion model được xác nhận. Chỉ điền bảng dưới đây sau khi hoàn thành validation, khóa cấu hình và chạy final test đúng một lần.
+---
+
+## 2. Hợp Đồng Dữ Liệu Ngữ Nghĩa Nhãn (Data Contract)
+
+- **Annotation Unit**: Vùng tổn thương đại diện quan sát được trên phiến lá (`visible symptomatic region associated with target disease`).
+- **Negative Samples**: Ảnh không chứa nhãn (0 detections) biểu thị lá không có triệu chứng mục tiêu hoặc lá khỏe mạnh; không có class riêng biệt cho lá khỏe.
+- **Tọa độ chuẩn hóa**: $x_{center}, y_{center}, w, h \in [0, 1]$. Các nhãn dạng polygon từ dữ liệu nguồn được chuyển đổi thành bounding envelope bao quanh.
+
+---
+
+## 3. Đối Tượng & Bối Cảnh Sử Dụng Phù Hợp
+
+### **Người dùng phù hợp**
+- Sinh viên, nghiên cứu sinh AI / Computer Vision.
+- Kỹ sư nông nghiệp thử nghiệm ứng dụng trinh sát và khoanh vùng triệu chứng bệnh hại.
+- Nhà phát triển tích hợp công cụ hỗ trợ thị giác máy tính vào quy trình kiểm tra thực địa.
+
+### **Bối cảnh hoạt động phù hợp**
+- Ảnh chụp cận cảnh từng lá lúa đơn lẻ hoặc cụm lá tương đối rõ ràng.
+- Đủ ánh sáng tự nhiên, góc chụp vuông góc hoặc hơi nghiêng.
+
+### **Bối cảnh KHÔNG phù hợp**
+- Ảnh toàn cánh đồng hoặc ảnh chụp từ máy bay không người lái (drone/UAV).
+- Ảnh chụp trong điều kiện ánh sáng cực kém, chói sáng mạnh hoặc ảnh nhiều lá chồng lấn phức tạp chưa qua kiểm chứng.
+- Suy luận các loại bệnh nông nghiệp ngoài 2 lớp đã định nghĩa.
+
+---
+
+## 4. Kiến Trúc & Cấu Hình Triển Khai
 
 | Trường | Giá trị |
 |---|---|
-| Kiến trúc | Chưa xác định |
-| Dataset version/hash | Chưa xác định |
-| Seed | 42 |
-| Precision test | Chưa xác định |
-| Recall test | Chưa xác định |
-| mAP50 test | Chưa xác định |
-| mAP50-95 test | Chưa xác định |
-| Confidence triển khai | Chưa xác định từ validation |
+| Kiến trúc mô hình | YOLOv8n (Baseline) / YOLOv8s (Candidate) |
+| Lineage & Checksum | Đã khóa bằng `manifest.csv` SHA-256 và `audit_report.json` SHA-256 |
+| Random Seed | 42 (Cố định trong toàn bộ pipeline) |
+| Ngưỡng tin cậy suy luận | Detection Score $\ge 0.25$, NMS IoU $= 0.45$ |
+| Tầng quyết định (Decision Layer) | `detections` kèm `image_summary` và cờ `requires_human_review` |
+| Định dạng phục vụ | PyTorch (`.pt`), ONNX (`.onnx`), OpenVINO, TorchScript |
 
-## Protocol lựa chọn
+---
 
-1. Huấn luyện YOLOv8n làm baseline và YOLOv8s làm ứng viên champion trên cùng split/seed.
-2. Xếp hạng chỉ bằng validation mAP50-95.
-3. Phân tích false positive, false negative và negative samples.
-4. Chốt confidence bằng validation.
-5. Chạy test một lần và ghi metric cuối cùng.
+## 5. Protocol Lựa Chọn & Khóa Đánh Giá
 
-## Intended use
+1. **Huấn luyện chuẩn tắc**: Huấn luyện đồng thời `YOLOv8n` và `YOLOv8s` trên cùng tập Train đã lọc trùng bằng SHA-256 và gom nhóm pHash BK-Tree + Union-Find.
+2. **Xếp hạng Champion duy nhất bằng Validation mAP50-95**: Áp dụng các rào cản an toàn (Recall từng lớp $\ge 0.75$, latency p95 $\le 300\text{ ms}$).
+3. **Phân tích lỗi đa chiều**: Đo lường theo Error Taxonomy (Missed lesion, Background FP, Localization error, Classification confusion, Duplicate detection) và phân tầng kích thước tổn thương (Small $< 0.05$, Medium $0.05 - 0.2$, Large $> 0.2$).
+4. **Khóa tập Test (`--confirm-final-test`)**: Tập Test chỉ mở khóa duy nhất 1 lần khi chốt mô hình; không sử dụng kết quả test để tinh chỉnh siêu tham số.
+5. **Quality Gate xuất mô hình**: Kiểm định tương đương suy luận (Prediction Parity) giữa PyTorch và ONNX trên tập ảnh mẫu trước khi đóng gói triển khai.
 
-- Demo computer vision và portfolio kỹ thuật.
-- Hỗ trợ khoanh vùng triệu chứng trong ảnh lá lúa có chất lượng phù hợp.
-- Nghiên cứu pipeline dữ liệu, leakage và object detection.
+---
 
-## Không nên sử dụng
+## 6. Rủi Ro & Giới Hạn (Risks & Limitations)
 
-- Quyết định dùng thuốc hoặc xử lý nông nghiệp tự động.
-- Ảnh cây trồng khác, ảnh vệ tinh hoặc ảnh không thể hiện rõ lá lúa.
-- Suy luận các bệnh ngoài hai lớp đã huấn luyện.
-
-## Rủi ro và hạn chế
-
-- Domain shift giữa dataset công khai và ảnh thực địa.
-- Background bias, class imbalance và annotation noise.
-- Không có detection không đồng nghĩa với lá khỏe; hệ thống phải trả trạng thái chưa xác định khi confidence thấp.
-- Cần external test set độc lập trước khi tuyên bố khả năng khái quát.
-
+- **Domain Shift**: Sai biệt giữa ảnh công khai sạch và ảnh chụp thực tế ngoài đồng ruộng (ánh sáng, bùn đất, tạp chất).
+- **Class Imbalance & Small Lesions**: Tổn thương đốm nhỏ giai đoạn đầu dễ bị nhầm lẫn với bụi bẩn hoặc nếp gập lá tự nhiên.
+- **Uncalibrated Detection Score**: Điểm số YOLO thể hiện độ khớp đặc trưng hình ảnh, không phải xác suất bệnh lý tuyệt đối. Hệ thống sử dụng cờ `requires_human_review` đối với các trường hợp ranh giới hoặc chồng lấn triệu chứng khác lớp.

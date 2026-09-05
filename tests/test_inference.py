@@ -20,10 +20,15 @@ def test_detection_dataclass_creation() -> None:
     assert det.confidence == 0.85
 
 
-def test_prediction_dataclass_rejection() -> None:
-    pred = Prediction(detections=[], rejected=True, reason="Không có vùng bệnh")
-    assert pred.rejected is True
-    assert pred.reason == "Không có vùng bệnh"
+def test_prediction_dataclass_fields() -> None:
+    pred = Prediction(
+        detections=[],
+        status="no_detection",
+        message="Không phát hiện vùng tổn thương",
+        warnings=["Kết quả không khẳng định lá khỏe"],
+    )
+    assert pred.status == "no_detection"
+    assert len(pred.warnings) == 1
 
 
 def test_detector_tu_choi_confidence_iou_ngoai_mien() -> None:
@@ -32,6 +37,9 @@ def test_detector_tu_choi_confidence_iou_ngoai_mien() -> None:
 
     with pytest.raises(ValueError, match="Ngưỡng IoU"):
         RiceLeafDetector("weights.pt", confidence=0.5, iou=1.5)
+
+    with pytest.raises(ValueError, match="Kích thước ảnh"):
+        RiceLeafDetector("weights.pt", image_size=0)
 
 
 def test_detector_tu_choi_file_weights_khong_ton_tai() -> None:

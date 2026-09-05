@@ -53,5 +53,6 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "--basetemp=.pytest_temp"
+addopts = "-p no:cacheprovider --basetemp=tmp_test"
+
 

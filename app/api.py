@@ -1,109 +1,153 @@
-"""FastAPI Web Service cho hệ thống Nhận Diện Bệnh Lá Lúa (Rice Leaf Disease Recognition API).
+"""RESTful FastAPI Web Service cho Nhận Diện Bệnh Lá Lúa (Rice Leaf Disease Recognition API).
 
-Dịch vụ RESTful API cung cấp các endpoint:
-- `GET /health`: Kiểm tra trạng thái hoạt động của dịch vụ (Health Check).
-- `GET /info`: Thông tin cấu hình mô hình, các lớp bệnh được hỗ trợ và ngưỡng suy luận.
-- `POST /predict`: Upload ảnh lá lúa (JPEG/PNG/WebP, <= 10MB) và nhận kết quả phát hiện dạng JSON.
+Cung cấp các endpoints:
+- `GET /health/live`: Liveness check.
+- `GET /health/ready`: Readiness check (kiểm tra khả năng suy luận của mô hình).
+- `GET /info`: Thông tin cấu hình và các lớp bệnh được hỗ trợ.
+- `POST /predict`: Upload ảnh và nhận kết quả phát hiện bệnh dạng JSON Pydantic Schema.
 """
 
-import os
-from dataclasses import asdict
-from functools import lru_cache
-from pathlib import Path
+import asyncio
+import logging
+from functools import cache
 from typing import Annotated
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
+from rice_leaf_detection import __version__
 from rice_leaf_detection.constants import CLASS_NAMES, CLASS_NAMES_VI
-from rice_leaf_detection.inference import RiceLeafDetector
+
+from .dependencies import get_detector
+from .schemas import DetectionResponse, ImageSummaryResponse, PredictionResponse
+from .settings import get_settings
+from .validation import decode_and_validate_image
+
+logger = logging.getLogger("rice_leaf_api")
 
 app = FastAPI(
     title="Rice Leaf Disease Detection API",
     description=(
-        "API phát hiện bạc lá lúa (Bacterial Leaf Blight) "
-        "và đốm nâu (Brown Spot) bằng YOLOv8."
+        "API phát hiện tổn thương Bạc lá lúa (Bacterial Leaf Blight) "
+        "và Đốm nâu (Brown Spot) bằng YOLOv8. Đây là công cụ hỗ trợ sàng lọc ban đầu."
     ),
-
-    version="1.1.0",
+    version=__version__,
 )
 
-# Giới hạn dung lượng upload tối đa 10 MB để phòng chống tấn công Từ chối dịch vụ (DoS)
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
+runtime_settings = get_settings()
+
+# Chỉ cho phép các giao diện đã khai báo gọi API từ trình duyệt.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(runtime_settings.cors_origins),
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 
-@lru_cache(maxsize=1)
-def get_detector() -> RiceLeafDetector:
-    """Khởi tạo và nạp mô hình vào bộ nhớ đệm (LRU cache) để tối ưu latency suy luận."""
-    weights = Path(os.getenv("RICE_MODEL_PATH", "artifacts/best.pt"))
-    confidence = float(os.getenv("RICE_CONFIDENCE", "0.25"))
-    iou = float(os.getenv("RICE_IOU", "0.45"))
-    return RiceLeafDetector(weights, confidence=confidence, iou=iou)
+@cache
+def get_semaphore() -> asyncio.Semaphore:
+    """Giới hạn số lượt suy luận đồng thời để bảo vệ tài nguyên mô hình."""
+    return asyncio.Semaphore(get_settings().inference_concurrency)
 
 
-@app.get("/health", summary="Kiểm tra sức khỏe dịch vụ")
-def health() -> dict[str, str]:
-    """Endpoint Healthcheck phục vụ kiểm tra trạng thái hoạt động của Container/Server."""
-    return {"status": "ok"}
+@app.get("/health/live", summary="Liveness Probe", tags=["Health"])
+def health_live() -> dict[str, str]:
+    """Trả về trạng thái hoạt động của tiến trình API server."""
+    return {"status": "live"}
 
 
-@app.get("/info", summary="Thông tin cấu hình mô hình")
-def info() -> dict:
-    """Trả về danh sách các lớp bệnh được hỗ trợ, ngưỡng tin cậy và trọng số mô hình."""
-    weights = os.getenv("RICE_MODEL_PATH", "artifacts/best.pt")
-    confidence = float(os.getenv("RICE_CONFIDENCE", "0.25"))
-    iou = float(os.getenv("RICE_IOU", "0.45"))
-    return {
-        "service": "Rice Leaf Disease Detection API",
-        "version": "1.1.0",
-        "supported_classes": CLASS_NAMES,
-        "supported_classes_vi": CLASS_NAMES_VI,
-        "model_weights": weights,
-        "default_confidence": confidence,
-        "default_iou": iou,
-        "max_upload_mb": 10,
-    }
-
-
-@app.post("/predict", summary="Dự đoán bệnh trên ảnh lá lúa")
-async def predict(file: Annotated[UploadFile, File()]) -> dict:
-    """Endpoint tiếp nhận file ảnh upload và trả về danh sách bounding boxes phát hiện bệnh.
-
-    - Kiểm tra MIME type hợp lệ (JPEG, PNG, WebP).
-    - Giới hạn kích thước file <= 10MB.
-    - Giải mã ảnh bằng OpenCV và chạy suy luận với `RiceLeafDetector`.
-    """
-    if file.content_type not in ALLOWED_TYPES:
-        raise HTTPException(
-            status_code=415,
-            detail="Định dạng file không được hỗ trợ. Chỉ chấp nhận JPEG, PNG hoặc WebP.",
-        )
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail="Dung lượng ảnh vượt quá giới hạn 10 MB.",
-        )
-
-    import cv2
-    import numpy as np
-
-    image = cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if image is None:
-        raise HTTPException(status_code=400, detail="Không đọc được nội dung ảnh")
-
+@app.get("/health/ready", summary="Readiness Probe", tags=["Health"])
+def health_ready() -> dict[str, str]:
+    """Kiểm tra mô hình đã được nạp thành công và sẵn sàng suy luận."""
     try:
-        prediction, _ = get_detector().predict(image)
-    except (FileNotFoundError, ValueError) as exc:
+        detector = get_detector()
+        if detector is None:
+            raise RuntimeError("Detector không khả dụng")
+    except (FileNotFoundError, ImportError, RuntimeError, ValueError) as exc:
+        logger.warning("Mô hình chưa sẵn sàng: %s", exc)
         raise HTTPException(
             status_code=503,
-            detail=f"Dịch vụ mô hình chưa sẵn sàng: {exc}",
+            detail="Dịch vụ mô hình chưa sẵn sàng suy luận",
         ) from exc
+    return {"status": "ready"}
 
+
+@app.get("/info", summary="Thông tin mô hình", tags=["System"])
+def info() -> dict:
+    """Trả về phiên bản API, các lớp hỗ trợ và cấu hình suy luận."""
+    settings = get_settings()
     return {
-        "filename": file.filename,
-        "rejected": prediction.rejected,
-        "reason": prediction.reason,
-        "detections": [asdict(item) for item in prediction.detections],
+        "service": "Rice Leaf Disease Detection API",
+        "version": __version__,
+        "supported_classes": CLASS_NAMES,
+        "supported_classes_vi": CLASS_NAMES_VI,
+        "model_weights": settings.weights.as_posix(),
+        "image_size": settings.image_size,
+        "default_confidence": settings.confidence,
+        "default_iou": settings.iou,
+        "max_upload_mb": settings.max_upload_bytes // (1024 * 1024),
     }
 
+
+@app.post("/predict", response_model=PredictionResponse, summary="Dự đoán bệnh", tags=["Inference"])
+async def predict(file: Annotated[UploadFile, File()]) -> PredictionResponse:
+    """Endpoint tiếp nhận file ảnh upload và trả về danh sách Bounding Boxes phát hiện bệnh.
+
+    - Kiểm tra magic bytes thực tế (JPEG/PNG/WebP).
+    - Kiểm tra dung lượng file <= 10MB và tổng số pixels <= 25M.
+    - Chạy suy luận trong nhóm luồng để không khóa vòng lặp sự kiện của API.
+    """
+    settings = get_settings()
+    content = await file.read(settings.max_upload_bytes + 1)
+    if len(content) > settings.max_upload_bytes:
+        limit_mb = settings.max_upload_bytes // (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=f"Dung lượng ảnh vượt quá giới hạn {limit_mb} MB.",
+        )
+
+    image = decode_and_validate_image(content, max_pixels=settings.max_image_pixels)
+
+    semaphore = get_semaphore()
+    try:
+        async with semaphore:
+            detector = get_detector()
+            prediction, _ = await run_in_threadpool(detector.predict, image)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        logger.exception("Lỗi suy luận mô hình")
+        raise HTTPException(
+            status_code=503,
+            detail="Dịch vụ mô hình suy luận thất bại",
+        ) from exc
+
+    image_summary_resp = None
+    if prediction.image_summary is not None:
+        image_summary_resp = ImageSummaryResponse(
+            bacterial_leaf_blight_detected=prediction.image_summary.bacterial_leaf_blight_detected,
+            brown_spot_detected=prediction.image_summary.brown_spot_detected,
+            total_detections=prediction.image_summary.total_detections,
+            requires_human_review=prediction.image_summary.requires_human_review,
+            review_reasons=prediction.image_summary.review_reasons,
+        )
+
+    return PredictionResponse(
+        filename=file.filename,
+        status=prediction.status,
+        message=prediction.message,
+        image_summary=image_summary_resp,
+        warnings=prediction.warnings,
+        detections=[
+            DetectionResponse(
+                class_id=d.class_id,
+                class_name=d.class_name,
+                class_name_vi=d.class_name_vi,
+                confidence=d.confidence,
+                detection_score=getattr(d, "detection_score", d.confidence),
+                box_xyxy=d.box_xyxy,
+            )
+            for d in prediction.detections
+        ],
+    )

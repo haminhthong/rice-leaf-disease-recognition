@@ -1,8 +1,0 @@
-[console_scripts]
-rice-analyze-errors = rice_leaf_detection.error_analysis:main
-rice-compare = rice_leaf_detection.compare:main
-rice-evaluate = rice_leaf_detection.evaluate:main
-rice-export = rice_leaf_detection.export:main
-rice-predict = rice_leaf_detection.predict:main
-rice-prepare = rice_leaf_detection.prepare:main
-rice-train = rice_leaf_detection.train:main

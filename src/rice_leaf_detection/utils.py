@@ -130,4 +130,3 @@ def safe_extract_zip(archive: Path, destination: Path) -> None:
 def write_json(path: Path, value: object) -> None:
     """Ghi cấu trúc dữ liệu Python ra file JSON với bộ mã UTF-8 và định dạng thụt lề 2 spaces."""
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-

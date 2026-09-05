@@ -5,8 +5,8 @@ Module này triển khai hai bước quan trọng trong Data Engineering:
 2. Nhóm các ảnh gần giống (Near-Duplicates do Augmentation/Crop) dựa trên khoảng cách Hamming pHash
    sử dụng cấu trúc cây **BK-Tree** (Burkhard-Keller Tree) kết hợp thuật toán Union-Find.
 
-Việc nhóm ảnh này giúp tiến hành **Group-aware Data Splitting**, đảm bảo các biến thể của cùng
-một bức ảnh gốc sẽ thuộc về cùng một split (Train/Val/Test), triệt tiêu Data Leakage giữa các tập.
+Việc nhóm ảnh này giúp giảm nguy cơ **Data Leakage** bằng cách giữ ảnh trùng và gần trùng
+trong cùng một nhóm trước khi chia dữ liệu theo tập Train/Val/Test.
 """
 
 from collections import defaultdict
@@ -16,10 +16,7 @@ Record = dict[str, Any]
 
 
 class UnionFind:
-    """Cấu trúc dữ liệu tập hợp rời rạc Disjoint-Set Union (DSU) với Path Compression và Rank.
-
-    Dùng để hợp nhất các chỉ số ảnh thuộc cùng một tập hợp gần trùng lặp.
-    """
+    """Cấu trúc dữ liệu tập hợp rời rạc Disjoint-Set Union (DSU) với Path Compression và Rank."""
 
     def __init__(self, size: int):
         self.parent = list(range(size))
@@ -47,9 +44,10 @@ class UnionFind:
 class BKTree:
     """Cấu trúc cây Burkhard-Keller (BK-Tree) tối ưu hóa truy vấn tìm kiếm phần tử theo metric.
 
-    BK-Tree tận dụng bất đẳng thức tam giác d(x, c) <= d(x, y) + d(y, c) để loại bỏ các nhánh cây
-    không nằm trong phạm vi khoảng cách Hamming tối đa [d - maximum, d + maximum], giúp giảm
-    độ phức tạp truy vấn từ O(N) xuống trung bình O(log N).
+    BK-Tree giúp giảm không gian tìm kiếm (search space) các chuỗi pHash theo khoảng cách Hamming
+    so với phương pháp so sánh toàn bộ từng cặp (naive all-pairs comparison) trong nhiều phân bố
+    dữ liệu thực tế. Hiệu năng truy vấn thực tế phụ thuộc vào phân bố metric của dữ liệu và không
+    đảm bảo cận trên O(log N).
     """
 
     def __init__(self):
@@ -85,9 +83,7 @@ class BKTree:
             if dist <= maximum:
                 matches.extend(node[1])
             stack.extend(
-                child
-                for edge, child in node[2].items()
-                if dist - maximum <= edge <= dist + maximum
+                child for edge, child in node[2].items() if dist - maximum <= edge <= dist + maximum
             )
         return matches
 
@@ -109,7 +105,7 @@ def deduplicate_and_group(
     records: list[Record],
     phash_distance: int | None,
 ) -> tuple[list[Record], dict[str, Any]]:
-    """Thực hiện lọc trùng SHA-256 và nhóm các ảnh gần trùng bằng BK-Tree + Union-Find.
+    """Thực hiện lọc trùng SHA-256 và cách ly xung đột nhãn bằng BK-Tree + Union-Find.
 
     Args:
         records: Danh sách các bản ghi ảnh nguyên bản.
@@ -118,30 +114,38 @@ def deduplicate_and_group(
     Returns:
         tuple[list[Record], dict[str, Any]]:
             - Danh sách các bản ghi ảnh độc lập đã được gán `group_id`.
-            - Thống kê chi tiết (số ảnh trùng SHA-256 bị loại, danh sách xung đột, liên kết pHash).
+            - Thống kê chi tiết (ảnh trùng bị loại, xung đột cách ly, liên kết pHash).
     """
     if phash_distance is not None and phash_distance < 0:
         raise ValueError("Khoảng cách pHash không được âm")
 
-    # 1. Loại bỏ các ảnh trùng SHA-256 tuyệt đối
+    # Loại ảnh trùng tuyệt đối và cách ly nhóm có nhãn xung đột.
     by_sha = defaultdict(list)
     for record in records:
         by_sha[record["sha256"]].append(record)
-    unique, conflicts, removed = [], [], 0
+
+    unique: list[Record] = []
+    quarantined_conflicts: list[dict[str, Any]] = []
+    removed = 0
+
     for digest, group in by_sha.items():
-        group.sort(key=lambda item: len(item["annotations"]), reverse=True)
-        unique.append(group[0])
-        removed += len(group) - 1
-        if len({_signature(item) for item in group}) > 1:
-            conflicts.append(
+        distinct_signatures = {_signature(item) for item in group}
+        if len(distinct_signatures) > 1:
+            # Không tự chọn một nhãn khi cùng nội dung ảnh lại có nhiều cách gán nhãn.
+            quarantined_conflicts.append(
                 {
                     "sha256": digest,
                     "paths": [item["image_path"] for item in group],
-                    "chosen": group[0]["image_path"],
+                    "reason": "Cùng nội dung ảnh nhưng có các hộp nhãn khác nhau",
                 }
             )
+            continue
 
-    # 2. Nhóm ảnh theo original_key (tên gốc từ Roboflow/Augmentation)
+        group.sort(key=lambda item: len(item["annotations"]), reverse=True)
+        unique.append(group[0])
+        removed += len(group) - 1
+
+    # Giữ các biến thể có cùng tên ảnh gốc trong một nhóm.
     groups = UnionFind(len(unique))
     original_keys = defaultdict(list)
     for index, record in enumerate(unique):
@@ -150,7 +154,7 @@ def deduplicate_and_group(
         for index in indices[1:]:
             groups.union(indices[0], index)
 
-    # 3. Nhóm ảnh gần trùng bằng BK-Tree dựa trên pHash
+    # BK-tree giảm số phép so sánh pHash trong các tập dữ liệu phù hợp.
     links = 0
     if phash_distance is not None:
         tree = BKTree()
@@ -162,13 +166,12 @@ def deduplicate_and_group(
                     links += 1
             tree.add(value, index)
 
-    # 4. Gán mã group_id đại diện duy nhất cho từng nhóm
+    # Mỗi thành phần liên thông nhận một mã nhóm ổn định trong lần chạy.
     for index, record in enumerate(unique):
         record["group_id"] = f"group_{groups.find(index):06d}"
+
     return unique, {
         "exact_duplicates_removed": removed,
-        "annotation_conflicts": conflicts,
+        "annotation_conflicts": quarantined_conflicts,
         "near_duplicate_links": links,
     }
-
-

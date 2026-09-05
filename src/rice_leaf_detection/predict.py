@@ -31,9 +31,7 @@ def main() -> None:
     configure_utf8_console()
     args = parse_args()
     config = load_config(args.config)
-    args.conf = (
-        args.conf if args.conf is not None else config.inference.confidence
-    )
+    args.conf = args.conf if args.conf is not None else config.inference.confidence
     args.iou = args.iou if args.iou is not None else config.inference.iou
     if not 0 <= args.conf <= 1:
         raise ValueError("--conf phải nằm trong khoảng [0, 1]")
@@ -45,6 +43,7 @@ def main() -> None:
     model = YOLO(str(args.weights))
     results = model.predict(
         source=str(args.source),
+        imgsz=config.data.image_size,
         conf=args.conf,
         iou=args.iou,
         save=True,

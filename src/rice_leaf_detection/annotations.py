@@ -6,7 +6,6 @@ Module này phụ trách:
 3. Kiểm tra tính hợp lệ của tọa độ ([0, 1], NaN, Inf, lệch biên) và loại bỏ nhãn trùng lặp.
 """
 
-
 import math
 import re
 from pathlib import Path
@@ -152,9 +151,7 @@ def parse_annotation_line(
     height = y_max - y_min
     if not math.isclose(x, original_box[0]) or not math.isclose(y, original_box[1]):
         source_type = f"{source_type}_clipped"
-    elif not math.isclose(width, original_box[2]) or not math.isclose(
-        height, original_box[3]
-    ):
+    elif not math.isclose(width, original_box[2]) or not math.isclose(height, original_box[3]):
         source_type = f"{source_type}_clipped"
 
     return {
@@ -197,4 +194,3 @@ def parse_label_file(
         key = (ann["class_id"], *(round(ann[key], 6) for key in ("x", "y", "w", "h")))
         unique[key] = ann
     return list(unique.values()), errors, len(annotations) - len(unique)
-

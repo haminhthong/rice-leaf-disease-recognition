@@ -13,10 +13,25 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Cài thư viện
-        run: pip install -e ".[app,dev]"
-      - name: Kiểm tra định dạng và lỗi tĩnh
-        run: ruff check src app tests
-      - name: Chạy kiểm thử
-        run: pytest -q
 
+      - name: Cài đặt phụ thuộc
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[app,dev]"
+
+      - name: Kiểm tra định dạng (Ruff Format)
+        run: ruff format --check src app scripts tests
+
+      - name: Kiểm tra mã nguồn (Ruff Linter)
+        run: ruff check src app scripts tests
+
+      - name: Kiểm tra tính toàn vẹn phụ thuộc (Pip Check)
+        run: pip check
+
+      - name: Import Smoke Test
+        run: |
+          python -c "import rice_leaf_detection; print(rice_leaf_detection.__version__)"
+          python -c "from app.api import app; print(app.title)"
+
+      - name: Chạy Unit Tests Suite
+        run: pytest -v

@@ -8,7 +8,6 @@ Pipeline bao gồm các công đoạn:
 5. Ghi tập dữ liệu sạch, manifest.csv, audit_report.json và data.yaml an toàn.
 """
 
-
 import argparse
 import re
 import shutil
@@ -38,24 +37,18 @@ Record = dict[str, Any]
 AuditReport = dict[str, Any]
 
 
-
 def locate_dataset_root(directory: Path) -> Path:
     candidates = []
     for yaml_path in directory.rglob("data.yaml"):
         root = yaml_path.parent
         has_train = (root / "train" / "images").exists()
-        has_validation = (
-            (root / "valid" / "images").exists()
-            or (root / "val" / "images").exists()
-        )
+        has_validation = (root / "valid" / "images").exists() or (root / "val" / "images").exists()
         has_test = (root / "test" / "images").exists()
         if has_train and has_validation and has_test:
             candidates.append(root)
     candidates = sorted(set(candidates), key=lambda path: len(path.parts))
     if len(candidates) != 1:
-        raise RuntimeError(
-            f"Cần đúng một bộ dữ liệu YOLO trong {directory}, tìm thấy {candidates}"
-        )
+        raise RuntimeError(f"Cần đúng một bộ dữ liệu YOLO trong {directory}, tìm thấy {candidates}")
     return candidates[0]
 
 
@@ -100,6 +93,8 @@ def collect_records(
         "missing_label_files": [],
         "duplicate_annotation_lines_removed": 0,
         "clipped_boxes": 0,
+        "polygon_count": 0,
+        "bbox_count": 0,
         "source_classes": {},
     }
     for source in sources:
@@ -110,8 +105,11 @@ def collect_records(
             label_dir = source["root"] / old_split / "labels"
             if not image_dir.exists():
                 continue
-            images = sorted(path for path in image_dir.iterdir()
-                            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS)
+            images = sorted(
+                path
+                for path in image_dir.iterdir()
+                if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+            )
             for image_path in tqdm(images, desc=f"Đọc {source['name']}/{old_split}"):
                 label_path = label_dir / f"{image_path.stem}.txt"
                 if not label_path.exists():
@@ -123,6 +121,11 @@ def collect_records(
                     str(annotation["source_type"]).endswith("_clipped")
                     for annotation in annotations
                 )
+                for annotation in annotations:
+                    if "polygon" in str(annotation.get("source_type", "")):
+                        audit["polygon_count"] += 1
+                    else:
+                        audit["bbox_count"] += 1
                 if not annotations and not keep_negatives:
                     continue
                 try:
@@ -143,9 +146,7 @@ def collect_records(
                         "height": height,
                         "sha256": sha256_file(image_path),
                         "phash": phash,
-                        "original_key": (
-                            f"{source['name']}:{image_path.stem.split('.rf.')[0]}"
-                        ),
+                        "original_key": (f"{source['name']}:{image_path.stem.split('.rf.')[0]}"),
                         "annotations": annotations,
                     }
                 )
@@ -231,6 +232,7 @@ def write_dataset(
                 "source": record["source"],
                 "old_split": record["old_split"],
                 "group_id": record["group_id"],
+                "original_key": record.get("original_key", ""),
                 "output_image": relative_image.as_posix(),
                 "source_image": record["image_path"],
                 "sha256": record["sha256"],
@@ -243,10 +245,45 @@ def write_dataset(
             }
         )
     frame = pd.DataFrame(rows)
+
+    # Thống kê chéo Source x Split và phân bố lớp theo nguồn
+    source_split_matrix = pd.crosstab(frame["split"], frame["source"]).to_dict()
+    source_classes: dict[str, dict[str, int]] = {}
+    for src in frame["source"].unique():
+        sub = frame[frame["source"] == src]
+        source_classes[str(src)] = {
+            "instances_class_0": int(sub["instances_class_0"].sum()),
+            "instances_class_1": int(sub["instances_class_1"].sum()),
+            "negatives": int(sub["is_negative"].sum()),
+            "total_images": len(sub),
+        }
+
+    # Thống kê phân bố diện tích tổn thương (Small < 0.05, Medium 0.05-0.2, Large > 0.2)
+    split_lesion_sizes: dict[str, dict[str, int]] = {
+        s: {"small": 0, "medium": 0, "large": 0, "total": 0} for s in SPLITS
+    }
+    for r in records:
+        sp = r["split"]
+        for ann in r["annotations"]:
+            area = float(ann["w"]) * float(ann["h"])
+            split_lesion_sizes[sp]["total"] += 1
+            if area < 0.05:
+                split_lesion_sizes[sp]["small"] += 1
+            elif area <= 0.20:
+                split_lesion_sizes[sp]["medium"] += 1
+            else:
+                split_lesion_sizes[sp]["large"] += 1
+
+    audit["split_diagnostics"] = {
+        "source_split_matrix": source_split_matrix,
+        "source_class_distribution": source_classes,
+        "lesion_size_distribution": split_lesion_sizes,
+    }
+
     frame.to_csv(temporary / "manifest.csv", index=False)
     write_json(temporary / "audit_report.json", audit)
     yaml_config = {
-        "path": str(output.resolve()),
+        "path": ".",
         "train": "train/images",
         "val": "val/images",
         "test": "test/images",
@@ -274,6 +311,41 @@ def write_dataset(
     return frame
 
 
+MIN_GROUPS_PER_SPLIT = {
+    "train": 10,
+    "val": 5,
+    "test": 5,
+}
+
+MIN_INSTANCES_PER_CLASS = {
+    "val": 20,
+    "test": 20,
+}
+
+
+def validate_split_sizes(manifest: pd.DataFrame) -> None:
+    """Kiểm tra số lượng nhóm ảnh và số lượng nhãn instance tối thiểu cho mỗi split."""
+    group_counts = manifest.groupby("split")["group_id"].nunique()
+    for split, minimum in MIN_GROUPS_PER_SPLIT.items():
+        count = group_counts.get(split, 0)
+        if count < minimum:
+            raise ValueError(f"Tập {split} chỉ có {count} nhóm ảnh, yêu cầu tối thiểu {minimum}")
+
+    for split, minimum in MIN_INSTANCES_PER_CLASS.items():
+        if split not in manifest["split"].values:
+            continue
+        for class_id in range(len(CLASS_NAMES)):
+            col = f"instances_class_{class_id}"
+            if col in manifest.columns:
+                instance_count = manifest.loc[manifest["split"] == split, col].sum()
+                if instance_count < minimum:
+                    cname = CLASS_NAMES[class_id]
+                    raise ValueError(
+                        f"Tập {split} chỉ có {instance_count} instance lớp {class_id} ({cname}), "
+                        f"yêu cầu tối thiểu {minimum}"
+                    )
+
+
 def validate_dataset(manifest: pd.DataFrame, output: Path) -> None:
     if manifest.empty:
         raise ValueError("Manifest không có dữ liệu")
@@ -281,6 +353,16 @@ def validate_dataset(manifest: pd.DataFrame, output: Path) -> None:
         raise ValueError("Có nhóm ảnh xuất hiện ở nhiều tập dữ liệu")
     if manifest.groupby("sha256")["split"].nunique().max() != 1:
         raise ValueError("Có ảnh trùng SHA-256 xuất hiện ở nhiều tập dữ liệu")
+    if (
+        "original_key" in manifest.columns
+        and manifest.groupby("original_key")["split"].nunique().max() != 1
+    ):
+        raise ValueError(
+            "Có ảnh cùng original_key xuất hiện ở nhiều tập dữ liệu (rò rỉ augmentation)"
+        )
+
+    validate_split_sizes(manifest)
+
     for split in SPLITS:
         images = {path.stem for path in (output / split / "images").iterdir() if path.is_file()}
         labels = {path.stem for path in (output / split / "labels").glob("*.txt")}
@@ -289,9 +371,7 @@ def validate_dataset(manifest: pd.DataFrame, output: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Chuẩn hóa và hợp nhất các bộ dữ liệu YOLO lá lúa"
-    )
+    parser = argparse.ArgumentParser(description="Chuẩn hóa và hợp nhất các bộ dữ liệu YOLO lá lúa")
     parser.add_argument("--archives", nargs="+", type=Path, default=list(DEFAULT_ARCHIVES))
     parser.add_argument("--output", type=Path, default=Path("data/processed/rice_leaf_detection"))
     parser.add_argument("--extract-dir", type=Path, default=Path("data/extracted"))
@@ -311,15 +391,44 @@ def main() -> None:
     records, audit = collect_records(sources, not args.drop_negatives)
     records, dedup_audit = deduplicate_and_group(records, args.phash_distance)
     audit.update(dedup_audit)
+
+    # Ghi báo cáo xung đột nhãn (nếu có)
+    conflicts = audit.get("annotation_conflicts", [])
+    if conflicts:
+        conflict_dir = Path("reports/data_conflicts")
+        conflict_dir.mkdir(parents=True, exist_ok=True)
+        conflict_rows = []
+        for item in conflicts:
+            conflict_rows.append(
+                {
+                    "sha256": item["sha256"],
+                    "reason": item.get("reason", "conflict"),
+                    "paths": "; ".join(item.get("paths", [])),
+                }
+            )
+        pd.DataFrame(conflict_rows).to_csv(conflict_dir / "conflicts.csv", index=False)
+        print(f"Đã cách ly {len(conflicts)} xung đột nhãn vào reports/data_conflicts/conflicts.csv")
+
     assign_splits(records)
     manifest = write_dataset(records, audit, args.output, overwrite=args.overwrite)
-    summary = manifest.groupby("split").agg(images=("output_image", "count"),
-                                             negatives=("is_negative", "sum"),
-                                             bacterial_boxes=("instances_class_0", "sum"),
-                                             brown_spot_boxes=("instances_class_1", "sum"))
+    summary = manifest.groupby("split").agg(
+        images=("output_image", "count"),
+        negatives=("is_negative", "sum"),
+        bacterial_boxes=("instances_class_0", "sum"),
+        brown_spot_boxes=("instances_class_1", "sum"),
+    )
     print(f"\nDataset đã tạo tại {args.output.resolve()}\n{summary}")
-    print(f"Đã loại {audit['exact_duplicates_removed']} ảnh trùng tuyệt đối; "
-          f"tạo {audit['near_duplicate_links']} liên kết gần trùng.")
+    print(
+        f"Đã loại {audit['exact_duplicates_removed']} ảnh trùng tuyệt đối; "
+        f"tạo {audit['near_duplicate_links']} liên kết gần trùng."
+    )
+    print("\nPhân bố ảnh theo Nguồn & Phân tập (Split x Source):")
+    print(pd.crosstab(manifest["split"], manifest["source"]))
+    print(
+        f"\nTổng quan chuẩn hóa nhãn: {audit['bbox_count']} BBox gốc, "
+        f"{audit['polygon_count']} Polygon->BBox chuyển đổi, "
+        f"{audit['clipped_boxes']} nhãn xén viền (clipped)."
+    )
 
 
 if __name__ == "__main__":

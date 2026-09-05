@@ -70,14 +70,10 @@ def main() -> None:
             raise FileNotFoundError(path)
 
     device = (
-        args.device
-        if args.device is not None
-        else ("0" if torch.cuda.is_available() else "cpu")
+        args.device if args.device is not None else ("0" if torch.cuda.is_available() else "cpu")
     )
     batch = args.batch or (
-        config.training.batch_gpu
-        if torch.cuda.is_available()
-        else config.training.batch_cpu
+        config.training.batch_gpu if torch.cuda.is_available() else config.training.batch_cpu
     )
 
     # Chạy validation bằng Ultralytics YOLO API
@@ -131,10 +127,7 @@ def main() -> None:
     if experiment_log.exists():
         history = pd.read_csv(experiment_log)
         history = history[
-            ~(
-                (history["run_name"] == summary["run_name"])
-                & (history["split"] == summary["split"])
-            )
+            ~((history["run_name"] == summary["run_name"]) & (history["split"] == summary["split"]))
         ]
         current = pd.concat([history, current], ignore_index=True)
     current.to_csv(experiment_log, index=False)
@@ -145,4 +138,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -37,7 +37,7 @@ def test_safe_extract_zip_tu_choi_zip_slip(tmp_path: Path) -> None:
     zip_path = tmp_path / "malicious.zip"
     dest_path = tmp_path / "extracted"
 
-    # Tạo file zip có đường dẫn độc hại (Path Traversal)
+    # Đường dẫn lùi ra ngoài thư mục đích phải bị từ chối.
     with zipfile.ZipFile(zip_path, "w") as zf:
         zf.writestr("../evil.txt", "malicious content")
 

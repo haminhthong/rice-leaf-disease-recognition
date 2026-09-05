@@ -170,12 +170,8 @@ def load_config(path: Path) -> ExperimentConfig:
                 _required(training_raw, "optimizer", "training"),
                 "training.optimizer",
             ),
-            learning_rate=float(
-                _required(training_raw, "learning_rate", "training")
-            ),
-            weight_decay=float(
-                _required(training_raw, "weight_decay", "training")
-            ),
+            learning_rate=float(_required(training_raw, "learning_rate", "training")),
+            weight_decay=float(_required(training_raw, "weight_decay", "training")),
         )
         inference = InferenceConfig(
             confidence=float(_required(inference_raw, "confidence", "inference")),
@@ -196,4 +192,3 @@ def load_config(path: Path) -> ExperimentConfig:
     _probability(inference.confidence, "inference.confidence")
     _probability(inference.iou, "inference.iou")
     return ExperimentConfig(project, data, model, training, inference)
-

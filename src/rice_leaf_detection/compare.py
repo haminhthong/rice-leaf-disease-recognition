@@ -16,7 +16,6 @@ from .utils import configure_utf8_console
 REQUIRED_COLUMNS = {"run_name", "split", "mAP50-95", "mAP50", "recall", "precision"}
 
 
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Xếp hạng mô hình bằng tập xác thực")
     parser.add_argument("--experiments", type=Path, default=Path("runs/evaluate/experiments.csv"))
