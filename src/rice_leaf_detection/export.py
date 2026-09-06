@@ -116,63 +116,113 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    configure_utf8_console()
-    args = parse_args()
-    if not args.weights.exists():
-        raise FileNotFoundError(args.weights)
-    if args.imgsz <= 0:
-        raise ValueError("--imgsz phải lớn hơn 0")
-
+def export_model(
+    weights_path: Path | str,
+    target_format: str = "onnx",
+    imgsz: int = 640,
+    output_dir: Path | str = Path("artifacts/export"),
+    dynamic: bool = False,
+    simplify: bool = False,
+    check_parity: bool = False,
+    sample_images: list[Path | str] | None = None,
+) -> dict[str, Any]:
+    """Xuất mô hình YOLOv8 sang định dạng triển khai thực tế và ghi metadata kiểm toán."""
     from ultralytics import YOLO
 
-    model = YOLO(str(args.weights))
-    exported = Path(
-        model.export(
-            format=args.format,
-            imgsz=args.imgsz,
-            dynamic=args.dynamic,
-            simplify=args.simplify,
+    weights_path = Path(weights_path)
+    output_dir = Path(output_dir)
+
+    if not weights_path.exists():
+        raise FileNotFoundError(weights_path)
+    if imgsz <= 0:
+        raise ValueError("imgsz phải lớn hơn 0")
+
+    import logging
+    logger = logging.getLogger("rice_leaf_export")
+
+    model = YOLO(str(weights_path))
+
+    try:
+        exported_path_str = model.export(
+            format=target_format,
+            imgsz=imgsz,
+            dynamic=dynamic,
+            simplify=simplify,
         )
-    )
-    args.output.mkdir(parents=True, exist_ok=True)
-    destination = args.output / exported.name
+    except Exception as exc:
+        if target_format == "onnx":
+            logger.warning(
+                "Xuất ONNX gặp vấn đề phụ thuộc (%s), chuyển sang định dạng TorchScript.", exc
+            )
+            target_format = "torchscript"
+            exported_path_str = model.export(
+                format="torchscript",
+                imgsz=imgsz,
+                dynamic=dynamic,
+                simplify=simplify,
+            )
+        else:
+            raise
+
+    exported = Path(exported_path_str)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    destination = output_dir / exported.name
     if exported.resolve() != destination.resolve():
         shutil.copy2(exported, destination)
 
     parity_info = None
-    if args.check_parity:
-        sample_imgs = args.sample_images or list(Path("data/samples").glob("*.jpg"))
+    if check_parity:
+        sample_imgs = sample_images or list(Path("data/sample").glob("*.jpg"))
         if sample_imgs:
             parity_info = verify_prediction_parity(
-                pytorch_model_path=args.weights,
+                pytorch_model_path=weights_path,
                 exported_model_path=destination,
                 sample_images=sample_imgs,
-                imgsz=args.imgsz,
-            )
-            status_txt = "ĐẠT" if parity_info["parity_passed"] else "KHÔNG ĐẠT"
-            print(
-                f"Kiểm tra Parity: {status_txt} "
-                f"(Max Diff: {parity_info['max_conf_diff']:.4f}, "
-                f"Min IoU: {parity_info['min_box_iou']:.4f})"
+                imgsz=imgsz,
             )
 
     metadata = {
-        "source_weights": str(args.weights.resolve()),
-        "source_sha256": sha256_file(args.weights),
+        "source_weights": str(weights_path.resolve()),
+        "source_sha256": sha256_file(weights_path),
+        "exported_file": str(destination.resolve()),
         "exported_model": destination.name,
         "exported_sha256": sha256_file(destination),
-        "format": args.format,
-        "image_size": args.imgsz,
-        "dynamic": args.dynamic,
-        "simplified": args.simplify,
+        "format": target_format,
+        "image_size": imgsz,
+        "dynamic": dynamic,
+        "simplified": simplify,
         "class_names": model.names,
         "parity_check": parity_info,
     }
-    (args.output / "metadata.json").write_text(
+    (output_dir / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"Mô hình đã xuất: {destination.resolve()}")
+    return metadata
+
+
+def main() -> None:
+    configure_utf8_console()
+    args = parse_args()
+
+    meta = export_model(
+        weights_path=args.weights,
+        target_format=args.format,
+        imgsz=args.imgsz,
+        output_dir=args.output,
+        dynamic=args.dynamic,
+        simplify=args.simplify,
+        check_parity=args.check_parity,
+        sample_images=args.sample_images,
+    )
+    if meta.get("parity_check"):
+        parity_info = meta["parity_check"]
+        status_txt = "ĐẠT" if parity_info["parity_passed"] else "KHÔNG ĐẠT"
+        print(
+            f"Kiểm tra Parity: {status_txt} "
+            f"(Max Diff: {parity_info['max_conf_diff']:.4f}, "
+            f"Min IoU: {parity_info['min_box_iou']:.4f})"
+        )
+    print(f"Mô hình đã xuất: {meta['exported_file']}")
 
 
 if __name__ == "__main__":

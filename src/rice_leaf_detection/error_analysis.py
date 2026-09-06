@@ -204,22 +204,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    configure_utf8_console()
-    args = parse_args()
-    if args.split == "test" and not args.confirm_final_test:
-        raise SystemExit("Chỉ phân tích test sau khi chốt mô hình bằng tập xác thực.")
-    if not 0 <= args.confidence <= 1:
-        raise ValueError("--confidence phải nằm trong khoảng [0, 1]")
-    for path in (args.weights, args.dataset / "manifest.csv"):
-        if not path.exists():
-            raise FileNotFoundError(path)
-
+def run_error_analysis(
+    weights_path: Path | str,
+    dataset_dir: Path | str | None = None,
+    data_yaml_path: Path | str | None = None,
+    split: str = "val",
+    confidence: float = 0.25,
+    iou: float = 0.5,
+    output_dir: Path | str = Path("runs/error_analysis"),
+) -> dict[str, Any]:
+    """Phân tích lỗi mô hình theo lát cắt kích thước tổn thương và taxonomy chuẩn."""
     from ultralytics import YOLO
 
-    model = YOLO(str(args.weights))
-    manifest = pd.read_csv(args.dataset / "manifest.csv")
-    manifest = manifest[manifest["split"] == args.split]
+    weights_path = Path(weights_path)
+    output_dir = Path(output_dir)
+
+    if dataset_dir is None:
+        if data_yaml_path is not None:
+            dataset_dir = Path(data_yaml_path).parent
+        else:
+            dataset_dir = Path("data/processed/rice_leaf_detection")
+    dataset_dir = Path(dataset_dir)
+
+    manifest_path = dataset_dir / "manifest.csv"
+    if not weights_path.exists():
+        raise FileNotFoundError(f"Không tìm thấy trọng số: {weights_path}")
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Không tìm thấy manifest: {manifest_path}")
+
+    model = YOLO(str(weights_path))
+    manifest = pd.read_csv(manifest_path)
+    manifest = manifest[manifest["split"] == split]
     rows: list[dict[str, Any]] = []
     totals: Counter[str] = Counter()
 
@@ -227,11 +242,11 @@ def main() -> None:
     lesion_size_recalled = {"small": 0, "medium": 0, "large": 0}
 
     for record in manifest.itertuples(index=False):
-        image_path = args.dataset / record.output_image
-        label_path = args.dataset / args.split / "labels" / f"{image_path.stem}.txt"
+        image_path = dataset_dir / record.output_image
+        label_path = dataset_dir / split / "labels" / f"{image_path.stem}.txt"
         truth = read_yolo_labels(label_path, int(record.width), int(record.height))
         result = model.predict(
-            source=str(image_path), conf=args.confidence, iou=0.7, verbose=False
+            source=str(image_path), conf=confidence, iou=0.7, verbose=False
         )[0]
         predictions: list[LabeledBox] = [
             (
@@ -241,10 +256,9 @@ def main() -> None:
             )
             for box in result.boxes
         ]
-        image_errors, counts = match_detections(truth, predictions, args.iou)
+        image_errors, counts = match_detections(truth, predictions, iou)
         totals.update(counts)
 
-        # Tính toán phân nhóm kích thước tổn thương và tỷ lệ recall
         unmatched_indices = {e["gt_index"] for e in image_errors if "gt_index" in e}
         for gt_idx, (_, gt_box, _) in enumerate(truth):
             size_cat = classify_lesion_size(gt_box, int(record.width), int(record.height))
@@ -262,9 +276,10 @@ def main() -> None:
                 }
             )
 
-    args.output.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     errors = pd.DataFrame(rows)
-    errors.to_csv(args.output / f"{args.split}_errors.csv", index=False)
+    errors.to_csv(output_dir / f"{split}_errors.csv", index=False)
+
     negative_false_positives = 0
     if not errors.empty:
         negative_mask = errors["is_negative"].astype(str).str.lower().eq("true")
@@ -300,9 +315,9 @@ def main() -> None:
     }
 
     summary = {
-        "split": args.split,
-        "confidence": args.confidence,
-        "iou_threshold": args.iou,
+        "split": split,
+        "confidence": confidence,
+        "iou_threshold": iou,
         **totals,
         "images": len(manifest),
         "negative_images_total": total_negatives,
@@ -311,8 +326,30 @@ def main() -> None:
         "error_taxonomy": error_taxonomy,
         "lesion_size_recall": lesion_size_recall,
     }
-    (args.output / f"{args.split}_summary.json").write_text(
+    (output_dir / f"{split}_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (output_dir / "error_summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return summary
+
+
+def main() -> None:
+    configure_utf8_console()
+    args = parse_args()
+    if args.split == "test" and not args.confirm_final_test:
+        raise SystemExit("Chỉ phân tích test sau khi chốt mô hình bằng tập xác thực.")
+    if not 0 <= args.confidence <= 1:
+        raise ValueError("--confidence phải nằm trong khoảng [0, 1]")
+
+    summary = run_error_analysis(
+        weights_path=args.weights,
+        dataset_dir=args.dataset,
+        split=args.split,
+        confidence=args.confidence,
+        iou=args.iou,
+        output_dir=args.output,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 

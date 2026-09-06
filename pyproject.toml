@@ -32,6 +32,7 @@ dev = [
 ]
 
 [project.scripts]
+rice-pipeline = "rice_leaf_detection.pipeline:main"
 rice-prepare = "rice_leaf_detection.prepare:main"
 rice-train = "rice_leaf_detection.train:main"
 rice-evaluate = "rice_leaf_detection.evaluate:main"

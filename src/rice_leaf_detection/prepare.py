@@ -283,7 +283,7 @@ def write_dataset(
     frame.to_csv(temporary / "manifest.csv", index=False)
     write_json(temporary / "audit_report.json", audit)
     yaml_config = {
-        "path": ".",
+        "path": output.resolve().as_posix(),
         "train": "train/images",
         "val": "val/images",
         "test": "test/images",

@@ -46,9 +46,11 @@ Hệ thống hoạt động theo cơ chế **định vị triệu chứng (Sympt
 
 ---
 
-## 4. Kiến Trúc Pipeline Canonical 8 Giai Đoạn
+## 4. Kiến Trúc Pipeline Canonical & Bộ Điều Phối (Pipeline Orchestration)
 
-Toàn bộ quy trình từ dữ liệu thô đến triển khai phục vụ được chuẩn hóa thành **Pipeline 8 giai đoạn duy nhất** xuyên suốt repository:
+> 📘 **Tài liệu kiến trúc chuyên sâu**: Xem phân tích chi tiết mọi khía cạnh tại [docs/DATA_AND_LOGIC_FLOW.md](docs/DATA_AND_LOGIC_FLOW.md) (bao gồm sơ đồ Mermaid về Data Flow, Logic Flow, Data Contracts giữa các tầng và cây quyết định hỗ trợ trinh sát thực địa).
+
+Toàn bộ quy trình từ dữ liệu thô đến triển khai phục vụ được tự động hóa bằng **Pipeline Orchestrator** trung tâm (`rice-pipeline` hoặc `python scripts/run_pipeline.py`):
 
 ```text
 1. MULTI-SOURCE DATA INGESTION
@@ -74,6 +76,21 @@ Toàn bộ quy trình từ dữ liệu thô đến triển khai phục vụ đư
         ↓
 8. SERVING & DECISION LAYER
    Rice Leaf Image ──► Input Validation ──► Shared RiceLeafDetector ──► Detection Score + Image Summary ──► Human Review Flag ──► FastAPI / Streamlit / ONNX
+```
+
+### Các Lệnh Điều Phối Pipeline Chính:
+```bash
+# Xem trước DAG các giai đoạn và kiểm tra điều kiện tiên quyết (Dry Run)
+python scripts/run_pipeline.py --dry-run
+
+# Chạy riêng công đoạn chuẩn hóa và chia dữ liệu sạch
+python scripts/run_pipeline.py --stage data
+
+# Chạy huấn luyện baseline (ví dụ 10 epochs)
+python scripts/run_pipeline.py --stage train --epochs 10
+
+# Chạy tự động hóa toàn bộ Pipeline (End-to-End Run)
+python scripts/run_pipeline.py --stage all
 ```
 
 ### Kiến Trúc Suy Luận Trực Tuyến (Online Serving Architecture)
@@ -289,8 +306,20 @@ rice-prepare --overwrite
 ruff format --check src app scripts tests
 ruff check src app scripts tests
 
-# Chạy toàn bộ 41 automated tests
+# Chạy toàn bộ test suite (47+ tests)
 pytest -v
+```
+
+### 4. Chạy Toàn Bộ Pipeline & Khởi Chạy Web App
+```bash
+# Thực thi toàn bộ quy trình: Chuẩn hóa -> Train Baseline -> Đánh giá -> Xuất ONNX
+python scripts/run_pipeline.py --stage all --epochs 10
+
+# Khởi chạy REST API
+uvicorn app.api:app --reload --host 0.0.0.0 --port 8000
+
+# Hoặc khởi chạy Web Dashboard
+streamlit run app/dashboard.py
 ```
 
 ---
