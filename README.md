@@ -30,7 +30,7 @@ Dự án tập trung vào bài toán **Object Detection / Symptom Localization**
 
 Hệ thống hoạt động theo cơ chế **định vị triệu chứng (Symptom Localization)**, hoàn toàn khác biệt với phân loại ảnh toàn thể (Whole-image Classification):
 - Mỗi hình ảnh có thể chứa **0, 1 hoặc nhiều vùng tổn thương** của cùng một hoặc cả hai loại bệnh.
-- **Không có lớp "Healthy"**: Trong bài toán Object Detection, một lá khỏe mạnh hoặc không có triệu chứng mục tiêu được định nghĩa chuẩn tắc là **Negative Sample (ảnh không chứa Bounding Box)**. Trạng thái `no_detection` nghĩa là không phát hiện triệu chứng vượt ngưỡng tin cậy thuộc 2 lớp hỗ trợ.
+- **Không có lớp "Healthy"**: Trong bài toán Object Detection, một lá khỏe mạnh hoặc không có triệu chứng mục tiêu được định nghĩa chuẩn tắc là **Negative Sample (ảnh không chứa Bounding Box)**. Trạng thái `NO_SUPPORTED_SYMPTOM_DETECTED` chỉ nghĩa là chưa tìm thấy triệu chứng thuộc phạm vi hỗ trợ, không khẳng định lá khỏe.
 
 ---
 
@@ -66,7 +66,7 @@ Toàn bộ quy trình từ dữ liệu thô đến triển khai phục vụ đư
    Image groups ──► Train 70% / Val 15% / Test 15% ──► Zero group leakage ──► Source & size distribution audit
         ↓
 5. MODEL DEVELOPMENT
-   YOLOv8n baseline ──► YOLOv8s candidate ──► Validation-only model selection ──► Champion policy
+   YOLOv8s @ 640 ──► Validation metrics ──► Decision policy ──► Locked test ──► Versioned release
         ↓
 6. ERROR & ROBUSTNESS ANALYSIS
    Per-class AP / Recall ──► FP / FN / Low IoU / Confusion ──► Lesion size slices (S/M/L) ──► Negative false alarm
@@ -120,7 +120,7 @@ FastAPI REST API / Streamlit Dashboard / ONNX Runtime
 
 - **Source 1 (`RiceLeafAnnotatedDataset.zip`)**: Bộ dữ liệu ảnh lá lúa công khai gán nhãn đa dạng theo định dạng YOLO.
 - **Source 2 (`dataset1.zip`)**: Bộ dữ liệu bổ sung với nhiều góc chụp và độ chiếu sáng khác nhau.
-- Chi tiết về phân bố nhãn, giấy phép CC BY 4.0 và kiểm toán dữ liệu được lưu tại [data/README.md](file:///d:/hoc/can%20lam/NhanDienBenhCayLua/rice-leaf-disease-recognition/data/README.md).
+- Chi tiết về phân bố nhãn, provenance và kiểm toán dữ liệu được lưu tại [data/README.md](data/README.md). License chỉ ghi `unknown/pending verification` nếu chưa có bằng chứng theo từng nguồn.
 
 ---
 
@@ -160,19 +160,13 @@ FastAPI REST API / Streamlit Dashboard / ONNX Runtime
 
 ---
 
-## 10. Lựa Chọn Mô Hình & Chính Sách Champion (Model Selection)
+## 10. Mô Hình Canonical & Chính Sách Quyết Định
 
-Dự án so sánh hai ứng viên:
-- **Baseline**: `YOLOv8n` (Nano - gọn nhẹ, tốc độ cao)
-- **Candidate**: `YOLOv8s` (Small - cân bằng độ chính xác và tài nguyên)
+Đường chạy production chỉ dùng `YOLOv8s @ 640` với hai lớp mục tiêu. `YOLOv8n` chỉ là baseline thí nghiệm riêng, không được tự động chọn làm model phục vụ.
 
-### Chính Sách Lựa Chọn Champion
-- **Metric tiên quyết (Primary)**: `Validation mAP50-95`.
-- **Rào cản an toàn (Guardrails)**:
-  - Recall từng lớp $\ge 0.75$.
-  - Chênh lệch Recall giữa 2 lớp $\le 0.15$.
-  - p95 Inference Latency $\le 300\text{ ms/ảnh}$.
-- **Quy tắc Pareto**: Nếu `v8s` chỉ hơn `v8n` dưới 1% mAP50-95 nhưng độ trễ tăng gấp đôi, cấu hình Nano có thể được ưu tiên cho môi trường biên (edge/mobile).
+- **Metric chính**: Validation `mAP50-95`.
+- **Metric theo use case**: Image-Level Target Recall, recall từng lớp, false-alarm rate của `TRUE_NEGATIVE` và `OUT_OF_SCOPE_NEGATIVE`.
+- **Decision policy**: `review_threshold` và `accept_threshold` nằm trong YAML, phải được chọn trên Validation rồi đóng gói cùng model. Test không được dùng để chỉnh ngưỡng.
 
 ---
 
@@ -180,8 +174,7 @@ Dự án so sánh hai ứng viên:
 
 | Kiến Trúc | Số Tham Số | Kích Thước File | Val mAP50-95 | Val Recall | p95 Latency (CPU) | Trường Hợp Triển Khai |
 |---|---|---|---|---|---|---|
-| **YOLOv8n** (Baseline) | ~3.2M | ~6.3 MB | *Đo đạc thực tế* | *Đo đạc thực tế* | ~45 ms | Thiết bị di động, Jetson, Raspberry Pi |
-| **YOLOv8s** (Candidate) | ~11.2M | ~22.5 MB | *Đo đạc thực tế* | *Đo đạc thực tế* | ~110 ms | Server Cloud, trinh sát tự động |
+| **YOLOv8s** (Canonical) | ~11.2M | ~22.5 MB | *Đo đạc thực tế* | *Đo đạc thực tế* | *Đo đạc thực tế* | Server Cloud, trinh sát tự động |
 
 > [!NOTE]
 > Bảng trên thể hiện khung đo đạc chính thức. Số liệu mAP sẽ được ghi nhận sau khi huấn luyện hoàn tất trên toàn bộ tập dữ liệu thực nghiệm đã kiểm toán.
@@ -223,16 +216,16 @@ Detection Errors
 ## 14. Giao Thức Khóa Tập Test (Locked Final Test Protocol)
 
 - **Không Peeking**: Tập Test hoàn toàn bị cô lập trong quá trình huấn luyện, tinh chỉnh siêu tham số và phân tích lỗi (Val-only error tuning).
-- **Khóa kỹ thuật**: Lệnh `rice-evaluate --split test` bắt buộc cờ `--confirm-final-test` và chỉ được chạy **duy nhất một lần** sau khi Champion model đã được phê duyệt chính thức.
+- **Khóa kỹ thuật**: Lệnh `rice-evaluate --split test` bắt buộc cờ `--confirm-final-test`. Sau lần đầu, `final_test_report.json` tồn tại sẽ chặn chạy lại; chỉ `--force-reopen-test` mới mở lại và đánh dấu `test_compromised=true`.
 
 ---
 
 ## 15. Benchmark Ảnh Negative & Điểm Tin Cậy (Confidence Policy)
 
-- **Benchmark ảnh không bệnh (Negative Benchmark)**: Đo lường tỷ lệ báo động giả (False Positive Image %) trên tập ảnh lá lúa khỏe mạnh hoặc nền không có triệu chứng mục tiêu.
+- **Benchmark ảnh negative**: Báo cáo riêng tỷ lệ báo động giả trên `TRUE_NEGATIVE` và `OUT_OF_SCOPE_NEGATIVE`, không gộp hai loại thành một negative mơ hồ.
 - **Chính sách điểm số (Detection Score)**: YOLO confidence score thể hiện điểm số khớp đặc trưng hình ảnh của mô hình, không phải xác suất bệnh lý tuyệt đối đã cân bằng (uncalibrated score).
 - **Cờ thẩm định trực quan (Human Review Flag)**:
-  - Tự động kích hoạt khi xuất hiện các hộp có điểm phát hiện nằm trong vùng ranh giới ($0.25 - 0.45$).
+  - Tự động kích hoạt khi xuất hiện candidate trong vùng `[review_threshold, accept_threshold)` lấy từ cấu hình.
   - Tự động kích hoạt khi có các hộp phát hiện đè nhau thuộc hai lớp bệnh khác nhau.
 
 ---
@@ -312,7 +305,7 @@ pytest -v
 
 ### 4. Chạy Toàn Bộ Pipeline & Khởi Chạy Web App
 ```bash
-# Thực thi toàn bộ quy trình: Chuẩn hóa -> Train Baseline -> Đánh giá -> Xuất ONNX
+# Thực thi canonical: Chuẩn hóa -> Train YOLOv8s -> Val -> Error Analysis -> Test khóa -> Export
 python scripts/run_pipeline.py --stage all --epochs 10
 
 # Khởi chạy REST API

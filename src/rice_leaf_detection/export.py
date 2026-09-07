@@ -49,8 +49,10 @@ def verify_prediction_parity(
     }
 
     for img in sample_images:
-        pt_res = pt_model.predict(source=str(img), imgsz=imgsz, conf=0.25, verbose=False)[0]
-        exp_res = exp_model.predict(source=str(img), imgsz=imgsz, conf=0.25, verbose=False)[0]
+        # Parity so sánh cùng raw candidate ở ngưỡng thấp; decision policy
+        # được kiểm tra riêng trong detector/predictor.
+        pt_res = pt_model.predict(source=str(img), imgsz=imgsz, conf=0.001, verbose=False)[0]
+        exp_res = exp_model.predict(source=str(img), imgsz=imgsz, conf=0.001, verbose=False)[0]
 
         pt_boxes = pt_res.boxes
         exp_boxes = exp_res.boxes

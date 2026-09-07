@@ -16,7 +16,7 @@ Mô hình là **công cụ hỗ trợ trinh sát thực địa và sàng lọc b
 ## 2. Hợp Đồng Dữ Liệu Ngữ Nghĩa Nhãn (Data Contract)
 
 - **Annotation Unit**: Vùng tổn thương đại diện quan sát được trên phiến lá (`visible symptomatic region associated with target disease`).
-- **Negative Samples**: Ảnh không chứa nhãn (0 detections) biểu thị lá không có triệu chứng mục tiêu hoặc lá khỏe mạnh; không có class riêng biệt cho lá khỏe.
+- **Negative Samples**: `TRUE_NEGATIVE` là file nhãn rỗng đã xác minh; `OUT_OF_SCOPE_NEGATIVE` chứa bệnh ngoài phạm vi; `INVALID_OR_MISSING` luôn bị quarantine. Không có class riêng cho lá khỏe.
 - **Tọa độ chuẩn hóa**: $x_{center}, y_{center}, w, h \in [0, 1]$. Các nhãn dạng polygon từ dữ liệu nguồn được chuyển đổi thành bounding envelope bao quanh.
 
 ---
@@ -43,10 +43,10 @@ Mô hình là **công cụ hỗ trợ trinh sát thực địa và sàng lọc b
 
 | Trường | Giá trị |
 |---|---|
-| Kiến trúc mô hình | YOLOv8n (Baseline) / YOLOv8s (Candidate) |
+| Kiến trúc mô hình | YOLOv8s @ 640 (canonical) |
 | Lineage & Checksum | Đã khóa bằng `manifest.csv` SHA-256 và `audit_report.json` SHA-256 |
 | Random Seed | 42 (Cố định trong toàn bộ pipeline) |
-| Ngưỡng tin cậy suy luận | Detection Score $\ge 0.25$, NMS IoU $= 0.45$ |
+| Ngưỡng suy luận | Candidate/policy lấy từ `configs/default.yaml`, phải tune trên Validation |
 | Tầng quyết định (Decision Layer) | `detections` kèm `image_summary` và cờ `requires_human_review` |
 | Định dạng phục vụ | PyTorch (`.pt`), ONNX (`.onnx`), OpenVINO, TorchScript |
 
@@ -54,10 +54,10 @@ Mô hình là **công cụ hỗ trợ trinh sát thực địa và sàng lọc b
 
 ## 5. Protocol Lựa Chọn & Khóa Đánh Giá
 
-1. **Huấn luyện chuẩn tắc**: Huấn luyện đồng thời `YOLOv8n` và `YOLOv8s` trên cùng tập Train đã lọc trùng bằng SHA-256 và gom nhóm pHash BK-Tree + Union-Find.
-2. **Xếp hạng Champion duy nhất bằng Validation mAP50-95**: Áp dụng các rào cản an toàn (Recall từng lớp $\ge 0.75$, latency p95 $\le 300\text{ ms}$).
+1. **Huấn luyện chuẩn tắc**: Huấn luyện `YOLOv8s` trên tập Train đã lọc trùng bằng SHA-256 và gom nhóm pHash BK-Tree + Union-Find.
+2. **Chọn policy bằng Validation**: Dùng mAP50-95, image-level recall và false-alarm benchmark để chọn `review_threshold`/`accept_threshold`.
 3. **Phân tích lỗi đa chiều**: Đo lường theo Error Taxonomy (Missed lesion, Background FP, Localization error, Classification confusion, Duplicate detection) và phân tầng kích thước tổn thương (Small $< 0.05$, Medium $0.05 - 0.2$, Large $> 0.2$).
-4. **Khóa tập Test (`--confirm-final-test`)**: Tập Test chỉ mở khóa duy nhất 1 lần khi chốt mô hình; không sử dụng kết quả test để tinh chỉnh siêu tham số.
+4. **Khóa tập Test (`--confirm-final-test`)**: `final_test_report.json` chặn đánh giá lặp; chỉ force reopen mới mở lại và đánh dấu test bị compromise.
 5. **Quality Gate xuất mô hình**: Kiểm định tương đương suy luận (Prediction Parity) giữa PyTorch và ONNX trên tập ảnh mẫu trước khi đóng gói triển khai.
 
 ---

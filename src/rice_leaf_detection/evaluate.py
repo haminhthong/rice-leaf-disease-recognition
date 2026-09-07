@@ -10,13 +10,132 @@ Precision, Recall, mAP@50 và mAP@50-95 trên tập xác thực (Validation) ho�
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
-import torch
-from ultralytics import YOLO
 
 from .config import load_config
+from .constants import OUT_OF_SCOPE_NEGATIVE, TRUE_NEGATIVE
+from .error_analysis import box_iou, read_yolo_labels
 from .utils import configure_utf8_console
+
+
+def calculate_image_level_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Tính recall theo ảnh và false-alarm rate theo loại negative.
+
+    Mỗi row cần có ``truth_classes``, ``detected_classes``,
+    ``annotation_status`` và ``accepted_detection``. Hàm thuần để có thể test
+    mà không cần nạp YOLO.
+    """
+    classes = (0, 1)
+    positive_total = {str(class_id): 0 for class_id in classes}
+    positive_recalled = {str(class_id): 0 for class_id in classes}
+    negative_total = {TRUE_NEGATIVE: 0, OUT_OF_SCOPE_NEGATIVE: 0}
+    negative_false_alarm = {TRUE_NEGATIVE: 0, OUT_OF_SCOPE_NEGATIVE: 0}
+
+    for row in rows:
+        truth_classes = {int(value) for value in row.get("truth_classes", [])}
+        detected_classes = {int(value) for value in row.get("detected_classes", [])}
+        for class_id in truth_classes:
+            key = str(class_id)
+            if key not in positive_total:
+                continue
+            positive_total[key] += 1
+            if class_id in detected_classes:
+                positive_recalled[key] += 1
+        status = row.get("annotation_status")
+        if status in negative_total:
+            negative_total[status] += 1
+            if row.get("accepted_detection", False):
+                negative_false_alarm[status] += 1
+
+    target_recall = {
+        key: {
+            "positive_images": positive_total[key],
+            "recalled_images": positive_recalled[key],
+            "recall": (
+                round(positive_recalled[key] / positive_total[key], 4)
+                if positive_total[key]
+                else None
+            ),
+        }
+        for key in ("0", "1")
+    }
+    false_alarm_rate = {
+        status: {
+            "negative_images": negative_total[status],
+            "images_with_accepted_detection": negative_false_alarm[status],
+            "false_alarm_rate": (
+                round(negative_false_alarm[status] / negative_total[status], 4)
+                if negative_total[status]
+                else None
+            ),
+        }
+        for status in (TRUE_NEGATIVE, OUT_OF_SCOPE_NEGATIVE)
+    }
+    return {
+        "image_target_recall": target_recall,
+        "negative_benchmark": false_alarm_rate,
+    }
+
+
+def evaluate_image_level_metrics(
+    model: Any,
+    dataset_dir: Path,
+    manifest: pd.DataFrame,
+    split: str,
+    review_threshold: float,
+    accept_threshold: float,
+) -> dict[str, Any]:
+    """Chạy matching đơn giản trên từng ảnh để đo metric phục vụ scouting."""
+    rows: list[dict[str, Any]] = []
+    for record in manifest[manifest["split"] == split].itertuples(index=False):
+        image_path = dataset_dir / record.output_image
+        label_path = dataset_dir / split / "labels" / f"{image_path.stem}.txt"
+        truth = read_yolo_labels(label_path, int(record.width), int(record.height))
+        result = model.predict(
+            source=str(image_path),
+            conf=review_threshold,
+            iou=0.7,
+            verbose=False,
+        )[0]
+        detected_classes: set[int] = set()
+        accepted_detection = False
+        for box in result.boxes:
+            score = float(box.conf[0])
+            if score >= accept_threshold:
+                detected_classes.add(int(box.cls[0]))
+                accepted_detection = True
+        recalled_classes = set()
+        for true_class, true_box, _ in truth:
+            for box in result.boxes:
+                if (
+                    int(box.cls[0]) == true_class
+                    and float(box.conf[0]) >= accept_threshold
+                    and box_iou(
+                        tuple(float(value) for value in box.xyxy[0].tolist()),
+                        true_box,
+                    )
+                    >= 0.5
+                ):
+                    recalled_classes.add(true_class)
+                    break
+        rows.append(
+            {
+                "truth_classes": [class_id for class_id, _, _ in truth],
+                "detected_classes": recalled_classes,
+                "annotation_status": (
+                    getattr(record, "annotation_status", None)
+                    or (
+                        TRUE_NEGATIVE
+                        if str(getattr(record, "is_negative", "False")).lower() == "true"
+                        else "TARGET_POSITIVE"
+                    )
+                ),
+                "accepted_detection": accepted_detection,
+            }
+        )
+    return calculate_image_level_metrics(rows)
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,6 +165,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     """Hàm thực thi chính của pipeline đánh giá."""
+    import torch
+    from ultralytics import YOLO
+
     configure_utf8_console()
     args = parse_args()
     config = load_config(args.config)
@@ -77,7 +199,8 @@ def main() -> None:
     )
 
     # Chạy validation bằng Ultralytics YOLO API
-    metrics = YOLO(str(args.weights)).val(
+    model = YOLO(str(args.weights))
+    metrics = model.val(
         data=str(args.data),
         split=args.split,
         imgsz=args.imgsz,
@@ -86,6 +209,7 @@ def main() -> None:
         conf=0.001,
         iou=0.7,
         plots=True,
+        augment=False,
         project=str(args.output),
         name=f"{args.weights.parent.parent.name}_{args.split}",
         exist_ok=True,
@@ -100,6 +224,21 @@ def main() -> None:
         "mAP50": float(metrics.box.map50),
         "mAP50-95": float(metrics.box.map),
     }
+
+    # Metric theo ảnh giúp phản ánh đúng use case scouting: chỉ cần ít nhất
+    # một detection đúng trên ảnh bệnh, đồng thời phải đo false alarm riêng
+    # cho healthy và bệnh ngoài phạm vi.
+    manifest_path = args.data.parent / "manifest.csv"
+    if manifest_path.exists():
+        manifest = pd.read_csv(manifest_path)
+        summary["image_level"] = evaluate_image_level_metrics(
+            model=model,
+            dataset_dir=args.data.parent,
+            manifest=manifest,
+            split=args.split,
+            review_threshold=config.policy.review_threshold,
+            accept_threshold=config.policy.accept_threshold,
+        )
 
     # Tổng hợp metric chi tiết theo từng lớp bệnh
     rows = []

@@ -77,7 +77,7 @@ def test_predict_thanh_cong_voi_model_mock(mock_get_detector: MagicMock) -> None
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "detected"
+    assert payload["status"] == "DETECTED"
     assert len(payload["detections"]) == 1
     assert payload["detections"][0]["class_name_vi"] == "Bạc lá lúa"
 
@@ -104,6 +104,6 @@ def test_predict_no_detection_voi_model_mock(mock_get_detector: MagicMock) -> No
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "no_detection"
+    assert payload["status"] == "NO_SUPPORTED_SYMPTOM_DETECTED"
     assert len(payload["detections"]) == 0
     assert len(payload["warnings"]) > 0

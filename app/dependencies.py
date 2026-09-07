@@ -2,7 +2,7 @@
 
 from functools import cache
 
-from rice_leaf_detection.inference import RiceLeafDetector
+from rice_leaf_detection.inference import DetectionPolicy, RiceLeafDetector
 
 from .settings import get_settings
 
@@ -14,6 +14,10 @@ def get_detector() -> RiceLeafDetector:
     return RiceLeafDetector(
         weights=settings.weights,
         image_size=settings.image_size,
-        confidence=settings.confidence,
+        confidence=settings.candidate_confidence,
         iou=settings.iou,
+        policy=DetectionPolicy(
+            review_threshold=settings.review_threshold,
+            accept_threshold=settings.accept_threshold,
+        ),
     )

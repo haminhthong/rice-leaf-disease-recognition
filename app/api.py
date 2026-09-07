@@ -22,7 +22,7 @@ from rice_leaf_detection.constants import CLASS_NAMES, CLASS_NAMES_VI
 from .dependencies import get_detector
 from .schemas import DetectionResponse, ImageSummaryResponse, PredictionResponse
 from .settings import get_settings
-from .validation import decode_and_validate_image
+from .validation import assess_image_quality, decode_and_validate_image
 
 logger = logging.getLogger("rice_leaf_api")
 
@@ -86,7 +86,10 @@ def info() -> dict:
         "supported_classes_vi": CLASS_NAMES_VI,
         "model_weights": settings.weights.as_posix(),
         "image_size": settings.image_size,
-        "default_confidence": settings.confidence,
+        "candidate_confidence": settings.candidate_confidence,
+        "default_confidence": settings.candidate_confidence,
+        "review_threshold": settings.review_threshold,
+        "accept_threshold": settings.accept_threshold,
         "default_iou": settings.iou,
         "max_upload_mb": settings.max_upload_bytes // (1024 * 1024),
     }
@@ -110,6 +113,7 @@ async def predict(file: Annotated[UploadFile, File()]) -> PredictionResponse:
         )
 
     image = decode_and_validate_image(content, max_pixels=settings.max_image_pixels)
+    image_quality = assess_image_quality(image)
 
     semaphore = get_semaphore()
     try:
@@ -131,21 +135,34 @@ async def predict(file: Annotated[UploadFile, File()]) -> PredictionResponse:
             total_detections=prediction.image_summary.total_detections,
             requires_human_review=prediction.image_summary.requires_human_review,
             review_reasons=prediction.image_summary.review_reasons,
+            accepted_detections=prediction.image_summary.accepted_detections,
+            review_detections=prediction.image_summary.review_detections,
         )
 
+    # Chuẩn hóa response từ detector mới; mock/integration cũ có thể vẫn dùng
+    # detected/no_detection nên map tại biên API.
+    status_map = {
+        "detected": "DETECTED",
+        "no_detection": "NO_SUPPORTED_SYMPTOM_DETECTED",
+    }
+    status = status_map.get(prediction.status, prediction.status)
+
+    quality_warnings = list(image_quality.get("warnings", []))
+    warnings = [*quality_warnings, *prediction.warnings]
     return PredictionResponse(
         filename=file.filename,
-        status=prediction.status,
+        status=status,
         message=prediction.message,
+        image_quality=image_quality,
         image_summary=image_summary_resp,
-        warnings=prediction.warnings,
+        warnings=warnings,
         detections=[
             DetectionResponse(
                 class_id=d.class_id,
                 class_name=d.class_name,
                 class_name_vi=d.class_name_vi,
-                confidence=d.confidence,
-                detection_score=getattr(d, "detection_score", d.confidence),
+                score=d.score,
+                decision=d.decision,
                 box_xyxy=d.box_xyxy,
             )
             for d in prediction.detections

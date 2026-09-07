@@ -16,6 +16,7 @@ from typing import Any
 
 import pandas as pd
 
+from .constants import OUT_OF_SCOPE_NEGATIVE, TRUE_NEGATIVE
 from .utils import configure_utf8_console
 
 Box = tuple[float, float, float, float]
@@ -197,7 +198,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weights", type=Path, required=True)
     parser.add_argument("--dataset", type=Path, default=Path("data/processed/rice_leaf_detection"))
     parser.add_argument("--split", choices=("val", "test"), default="val")
-    parser.add_argument("--confidence", type=float, default=0.25)
+    parser.add_argument("--confidence", type=float, default=0.20)
     parser.add_argument("--iou", type=float, default=0.5)
     parser.add_argument("--output", type=Path, default=Path("reports/error_analysis"))
     parser.add_argument("--confirm-final-test", action="store_true")
@@ -209,7 +210,7 @@ def run_error_analysis(
     dataset_dir: Path | str | None = None,
     data_yaml_path: Path | str | None = None,
     split: str = "val",
-    confidence: float = 0.25,
+    confidence: float = 0.20,
     iou: float = 0.5,
     output_dir: Path | str = Path("runs/error_analysis"),
 ) -> dict[str, Any]:
@@ -240,6 +241,9 @@ def run_error_analysis(
 
     lesion_size_totals = {"small": 0, "medium": 0, "large": 0}
     lesion_size_recalled = {"small": 0, "medium": 0, "large": 0}
+    negative_totals = {TRUE_NEGATIVE: 0, OUT_OF_SCOPE_NEGATIVE: 0}
+    negative_false_positives_by_type = {TRUE_NEGATIVE: 0, OUT_OF_SCOPE_NEGATIVE: 0}
+    source_totals: dict[str, Counter] = {}
 
     for record in manifest.itertuples(index=False):
         image_path = dataset_dir / record.output_image
@@ -258,6 +262,15 @@ def run_error_analysis(
         ]
         image_errors, counts = match_detections(truth, predictions, iou)
         totals.update(counts)
+        source_totals.setdefault(str(record.source), Counter()).update(counts)
+
+        annotation_status = getattr(record, "annotation_status", None)
+        if annotation_status not in negative_totals and parse_boolean(record.is_negative):
+            annotation_status = TRUE_NEGATIVE
+        if annotation_status in negative_totals:
+            negative_totals[annotation_status] += 1
+            if any(error["error_type"] == "false_positive" for error in image_errors):
+                negative_false_positives_by_type[annotation_status] += 1
 
         unmatched_indices = {e["gt_index"] for e in image_errors if "gt_index" in e}
         for gt_idx, (_, gt_box, _) in enumerate(truth):
@@ -272,6 +285,7 @@ def run_error_analysis(
                     "image": record.output_image,
                     "source": record.source,
                     "is_negative": parse_boolean(record.is_negative),
+                    "annotation_status": annotation_status,
                     **error,
                 }
             )
@@ -288,7 +302,7 @@ def run_error_analysis(
             errors.loc[negative_mask & false_positive_mask, "image"].nunique()
         )
 
-    total_negatives = int(manifest["is_negative"].astype(str).str.lower().eq("true").sum())
+    total_negatives = sum(negative_totals.values())
     negative_fp_rate = (
         round(negative_false_positives / total_negatives, 4) if total_negatives > 0 else 0.0
     )
@@ -314,6 +328,38 @@ def run_error_analysis(
         for cat in ("small", "medium", "large")
     }
 
+    negative_benchmark = {
+        status: {
+            "negative_images": negative_totals[status],
+            "images_with_false_positive": negative_false_positives_by_type[status],
+            "false_alarm_rate": (
+                round(
+                    negative_false_positives_by_type[status] / negative_totals[status],
+                    4,
+                )
+                if negative_totals[status]
+                else None
+            ),
+        }
+        for status in (TRUE_NEGATIVE, OUT_OF_SCOPE_NEGATIVE)
+    }
+    source_slices = {
+        source: {
+            "true_positive": values.get("true_positive", 0),
+            "false_positive": values.get("false_positive", 0),
+            "false_negative": values.get("false_negative", 0),
+            "recall": round(
+                values.get("true_positive", 0)
+                / max(
+                    values.get("true_positive", 0) + values.get("false_negative", 0),
+                    1,
+                ),
+                4,
+            ),
+        }
+        for source, values in source_totals.items()
+    }
+
     summary = {
         "split": split,
         "confidence": confidence,
@@ -323,6 +369,8 @@ def run_error_analysis(
         "negative_images_total": total_negatives,
         "negative_images_with_false_positive": negative_false_positives,
         "negative_image_false_positive_rate": negative_fp_rate,
+        "negative_benchmark": negative_benchmark,
+        "source_slices": source_slices,
         "error_taxonomy": error_taxonomy,
         "lesion_size_recall": lesion_size_recall,
     }

@@ -33,7 +33,7 @@ flowchart TD
 
     subgraph Serving["TẦNG TRIỂN KHAI & SUY LUẬN (SERVING & DECISION)"]
         K --> P[ONNX Export & Prediction Parity Check]
-        P --> Q[(artifacts/best.pt & artifacts/best.onnx)]
+        P --> Q[(artifacts/model.pt & artifacts/model.onnx)]
         Q --> R[Shared RiceLeafDetector]
         R --> S[FastAPI REST Service: /predict, /health/ready]
         R --> T[Streamlit Field Scouting Dashboard]
@@ -108,7 +108,7 @@ flowchart LR
 4. **Group-aware Stratified Split**:
    - Thay vì chia ngẫu nhiên theo từng ảnh đơn lẻ (dễ gây Data Leakage nghiêm trọng làm mAP cao giả tạo), thuật toán phân chia theo đơn vị `group_id`.
    - Toàn bộ biến thể của cùng một ảnh gốc luôn được đảm bảo nằm trọn vẹn trong **duy nhất một tập** (Train, Val hoặc Test).
-   - Phân tầng (Stratified) dựa trên phân bố bệnh có trong nhóm (`classes_0`, `classes_1`, `classes_0_1`, hoặc `negative`).
+   - Greedy Group + Source + Class aware dựa trên số ảnh, số instance lớp và `TRUE_NEGATIVE`/`OUT_OF_SCOPE_NEGATIVE`.
 
 5. **Split Quality Gates (Rào cản kiểm soát chất lượng)**:
    - $\text{Group Leakage} = 0$: Không có bất kỳ `group_id` nào xuất hiện ở $\ge 2$ phân tập.
@@ -124,13 +124,13 @@ Mỗi giai đoạn trong hệ thống giao tiếp thông qua các file hợp đ�
 
 | Tên File Hợp Đồng | Định Dạng | Tầng Sinh Ra | Tầng Tiêu Thụ | Nội Dung Cốt Lõi |
 |---|---|---|---|---|
-| `manifest.csv` | CSV | Data Engineering | Training / Audit | Danh mục toàn bộ ảnh sạch: `split`, `source`, `group_id`, `sha256`, `phash`, `instances_class_0`, `instances_class_1`, `is_negative`. |
+| `manifest.csv` | CSV | Data Engineering | Training / Audit | Danh mục ảnh sạch: `split`, `source`, `group_id`, `sha256`, `phash`, `annotation_status`, `negative_type`, `class_0_instances`, `class_1_instances`. |
 | `audit_report.json` | JSON | Data Engineering | MLOps / Reporting | Báo cáo kiểm toán: Số ảnh hỏng, nhãn polygon đã chuyển đổi, số ảnh trùng đã lọc, ma trận chéo Source x Split, phân bố kích thước vết bệnh. |
 | `data.yaml` | YAML | Data Engineering | YOLOv8 Training | Đường dẫn tương đối tới `train/images`, `val/images`, `test/images` và ánh xạ tên 2 lớp bệnh. |
 | `run_metadata.json` | JSON/YAML | Model Training | Model Registry | Truy vết nguồn gốc: `git_commit_sha`, `data_manifest_sha256`, `best_weights_sha256`, `seed`, `hyperparameters`. |
 | `metrics.json` | JSON | Model Evaluation | Model Selection | Điểm số tổng hợp trên tập Validation: `precision`, `recall`, `mAP50`, `mAP50-95`. |
 | `per_class_metrics.csv` | CSV | Model Evaluation | Error Diagnostics | Điểm số phân rã theo từng lớp bệnh: `class_id`, `class_name`, `precision`, `recall`, `AP50`, `AP50-95`. |
-| `experiments.csv` | CSV | Model Evaluation | Champion Selection | Lịch sử thí nghiệm so sánh giữa Baseline (`YOLOv8n`) và Candidate (`YOLOv8s`). |
+| `experiments.csv` | CSV | Model Evaluation | Validation Diagnostics | Lịch sử metric trên Validation; không dùng để tự chọn file trọng số ngẫu nhiên. |
 | `error_summary.json` | JSON | Error Analysis | Diagnostics | Thống kê lỗi: True Positive, Missed Lesions (FN), Background False Positives (FP), phân tích theo lát cắt kích thước (Small, Medium, Large). |
 | `export_metadata.json` | JSON | Model Export | Serving Layer | Checksum SHA-256 của trọng số PyTorch và file ONNX xuất ra, kích thước file, thời điểm export. |
 
@@ -198,9 +198,9 @@ flowchart TD
 
 | Trạng Thái Đầu Ra | Ý Nghĩa Kỹ Thuật | Ý Nghĩa Nông Học Thực Địa | Hành Động Đề Xuất |
 |---|---|---|---|
-| `detected` | Tìm thấy ít nhất một vùng tổn thương có đặc trưng tương đồng Bạc lá hoặc Đốm nâu với confidence $\ge 0.25$. | Lá lúa đang xuất hiện triệu chứng nghi ngờ nhiễm bệnh mục tiêu. | Khoanh vùng ruộng, đối chiếu hình ảnh vết bệnh với hướng dẫn BVTV địa phương. |
-| `no_detection` | Không phát hiện vùng tổn thương nào thuộc 2 lớp bệnh mục tiêu vượt ngưỡng tin cậy. | **KHÔNG KHẲNG ĐỊNH LÁ KHỎE MẠNH**. Lá có thể bị bệnh khác (Đạo ôn, vàng lùn), rệp cắn, hoặc ảnh bị mờ/ngược sáng. | Tiếp tục theo dõi, kiểm tra lại điều kiện chụp ảnh nếu mắt thường thấy bất thường. |
-| `requires_human_review = true` | Điểm nhận diện nằm trong vùng nghi ngờ (0.25 - 0.45) hoặc có 2 vết bệnh khác loại đè lên nhau. | Triệu chứng phức tạp hoặc giai đoạn mới chớm, ranh giới giữa 2 loại bệnh chưa rõ ràng. | Bắt buộc chuyển ảnh cho cán bộ bảo vệ thực vật hoặc kỹ sư nông nghiệp thẩm định. |
+| `DETECTED` | Có ít nhất một vùng đạt `accept_threshold`. | Có triệu chứng mục tiêu được mô hình hỗ trợ phát hiện. | Đối chiếu với chuyên gia nông nghiệp. |
+| `REVIEW_REQUIRED` | Không có box accepted nhưng có candidate trong `[review_threshold, accept_threshold)`. | Kết quả ranh giới, chưa đủ cơ sở tự động chấp nhận. | Chuyển ảnh cho cán bộ bảo vệ thực vật thẩm định. |
+| `NO_SUPPORTED_SYMPTOM_DETECTED` | Không có candidate mục tiêu qua policy. | **KHÔNG KHẲNG ĐỊNH LÁ KHỎE MẠNH**. | Kiểm tra lại ảnh hoặc bệnh ngoài phạm vi. |
 
 ---
 
@@ -214,7 +214,7 @@ Hệ thống cung cấp công cụ điều phối trung tâm thông qua lệnh C
 flowchart LR
     S_DATA[Stage 1: data] --> S_TRAIN[Stage 2: train]
     S_TRAIN --> S_EVAL[Stage 3: evaluate]
-    S_EVAL --> S_COMP[Stage 4: compare]
+    S_EVAL --> S_ERR[Stage 4: error analysis]
     S_TRAIN --> S_ERR[Stage 5: errors]
     S_TRAIN --> S_TEST[Stage 6: test - Khóa]
     S_TRAIN --> S_EXP[Stage 7: export - ONNX]

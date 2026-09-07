@@ -5,6 +5,7 @@ data:
   yaml: data/processed/rice_leaf_detection/data.yaml
   image_size: 640
 model:
+  architecture: yolov8s
   weights: yolov8s.pt
 training:
   epochs: 100
@@ -15,6 +16,20 @@ training:
   optimizer: AdamW
   learning_rate: 0.001
   weight_decay: 0.0005
+  hsv_h: 0.005
+  hsv_s: 0.25
+  hsv_v: 0.20
+  degrees: 10
+  translate: 0.05
+  scale: 0.15
+  fliplr: 0.50
+  flipud: 0.00
+  mosaic: 0.20
+  mixup: 0.00
+  close_mosaic: 10
 inference:
-  confidence: 0.25
+  candidate_confidence: 0.20
   iou: 0.45
+policy:
+  review_threshold: 0.20
+  accept_threshold: 0.45

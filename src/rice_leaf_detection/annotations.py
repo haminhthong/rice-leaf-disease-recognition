@@ -75,9 +75,9 @@ def build_class_map(dataset_root: Path) -> tuple[list[str], dict[int, int]]:
         canonical = normalize_class_name(name)
         if canonical in CLASS_NAMES:
             mapping[old_id] = CLASS_NAMES.index(canonical)
-    missing = set(range(len(CLASS_NAMES))) - set(mapping.values())
-    if missing:
-        raise ValueError(f"{dataset_root} thiếu lớp mục tiêu: {missing}; names={names}")
+    # Không bắt buộc mọi nguồn phải có đủ hai lớp mục tiêu. Một nguồn chỉ có
+    # lớp ngoài phạm vi vẫn có thể được dùng làm hard negative, miễn là trạng
+    # thái đó được ghi rõ trong manifest thay vì âm thầm biến thành nhãn rỗng.
     return names, mapping
 
 
@@ -164,26 +164,45 @@ def parse_annotation_line(
     }, None
 
 
-def parse_label_file(
+def parse_label_file_detailed(
     path: Path,
     class_map: dict[int, int],
-) -> tuple[list[Annotation], list[str], int]:
-    """Đọc toàn bộ file nhãn `.txt`, lọc bỏ các dòng lỗi và các annotation bị trùng lặp chính xác.
+) -> tuple[list[Annotation], list[str], int, int]:
+    """Đọc nhãn và trả thêm số dòng thuộc lớp ngoài phạm vi mục tiêu.
 
     Args:
         path: Đường dẫn file `.txt` nhãn YOLO.
         class_map: Dictionary ánh xạ ID lớp.
 
     Returns:
-        tuple[list[Annotation], list[str], int]:
+        tuple[list[Annotation], list[str], int, int]:
             - Danh sách các annotation hợp lệ duy nhất.
             - Danh sách thông báo lỗi nếu có.
             - Số lượng dòng nhãn bị trùng lặp đã loại bỏ.
+            - Số dòng có class ID hợp lệ nhưng không thuộc phạm vi mục tiêu.
+
+    Dòng ngoài phạm vi được bỏ khỏi file YOLO đầu ra, nhưng không bị bỏ qua
+    về mặt dữ liệu: số lượng của chúng dùng để phân biệt
+    ``OUT_OF_SCOPE_NEGATIVE`` với ``TRUE_NEGATIVE``.
     """
     annotations: list[Annotation] = []
     errors: list[str] = []
+    unknown_class_count = 0
     if path.exists():
         for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            parts = line.split()
+            if parts:
+                try:
+                    raw_class = float(parts[0])
+                except ValueError:
+                    raw_class = None
+                if (
+                    raw_class is not None
+                    and math.isfinite(raw_class)
+                    and raw_class.is_integer()
+                    and int(raw_class) not in class_map
+                ):
+                    unknown_class_count += 1
             annotation, error = parse_annotation_line(line, class_map, path, line_no)
             if annotation is not None:
                 annotations.append(annotation)
@@ -193,4 +212,13 @@ def parse_label_file(
     for ann in annotations:
         key = (ann["class_id"], *(round(ann[key], 6) for key in ("x", "y", "w", "h")))
         unique[key] = ann
-    return list(unique.values()), errors, len(annotations) - len(unique)
+    return list(unique.values()), errors, len(annotations) - len(unique), unknown_class_count
+
+
+def parse_label_file(
+    path: Path,
+    class_map: dict[int, int],
+) -> tuple[list[Annotation], list[str], int]:
+    """Giữ API cũ, chỉ trả ba giá trị cơ bản cho các caller hiện hữu."""
+    annotations, errors, duplicate_count, _ = parse_label_file_detailed(path, class_map)
+    return annotations, errors, duplicate_count

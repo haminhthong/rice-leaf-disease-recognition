@@ -32,6 +32,7 @@ class DataConfig:
 class ModelConfig:
     """Cấu hình trọng số mô hình YOLOv8."""
 
+    architecture: str
     weights: str
 
 
@@ -47,14 +48,45 @@ class TrainingConfig:
     optimizer: str
     learning_rate: float
     weight_decay: float
+    augmentation: "AugmentationConfig"
+
+
+@dataclass(frozen=True)
+class AugmentationConfig:
+    """Chính sách augmentation chỉ áp dụng cho tập Train."""
+
+    hsv_h: float
+    hsv_s: float
+    hsv_v: float
+    degrees: float
+    translate: float
+    scale: float
+    fliplr: float
+    flipud: float
+    mosaic: float
+    mixup: float
+    close_mosaic: int
 
 
 @dataclass(frozen=True)
 class InferenceConfig:
-    """Cấu hình ngưỡng suy luận (confidence score và IoU threshold)."""
+    """Cấu hình lấy candidate từ detector và ngưỡng NMS."""
 
-    confidence: float
+    candidate_confidence: float
     iou: float
+
+    @property
+    def confidence(self) -> float:
+        """Tên cũ để các integration bên ngoài không bị hỏng đột ngột."""
+        return self.candidate_confidence
+
+
+@dataclass(frozen=True)
+class DecisionPolicyConfig:
+    """Ngưỡng quyết định nghiệp vụ được chọn trên Validation."""
+
+    review_threshold: float
+    accept_threshold: float
 
 
 @dataclass(frozen=True)
@@ -66,6 +98,7 @@ class ExperimentConfig:
     model: ModelConfig
     training: TrainingConfig
     inference: InferenceConfig
+    policy: DecisionPolicyConfig
 
 
 def _mapping(value: object, field: str) -> dict[str, Any]:
@@ -144,6 +177,7 @@ def load_config(path: Path) -> ExperimentConfig:
     model_raw = _mapping(_required(root, "model", "gốc"), "model")
     training_raw = _mapping(_required(root, "training", "gốc"), "training")
     inference_raw = _mapping(_required(root, "inference", "gốc"), "inference")
+    policy_raw = _mapping(root.get("policy", {}), "policy")
 
     try:
         project = ProjectConfig(
@@ -158,7 +192,23 @@ def load_config(path: Path) -> ExperimentConfig:
             image_size=int(_required(data_raw, "image_size", "data")),
         )
         model = ModelConfig(
+            architecture=_text(
+                model_raw.get("architecture", "yolov8s"), "model.architecture"
+            ),
             weights=_text(_required(model_raw, "weights", "model"), "model.weights")
+        )
+        augmentation = AugmentationConfig(
+            hsv_h=float(training_raw.get("hsv_h", 0.005)),
+            hsv_s=float(training_raw.get("hsv_s", 0.25)),
+            hsv_v=float(training_raw.get("hsv_v", 0.20)),
+            degrees=float(training_raw.get("degrees", 10.0)),
+            translate=float(training_raw.get("translate", 0.05)),
+            scale=float(training_raw.get("scale", 0.15)),
+            fliplr=float(training_raw.get("fliplr", 0.50)),
+            flipud=float(training_raw.get("flipud", 0.00)),
+            mosaic=float(training_raw.get("mosaic", 0.20)),
+            mixup=float(training_raw.get("mixup", 0.00)),
+            close_mosaic=int(training_raw.get("close_mosaic", 10)),
         )
         training = TrainingConfig(
             epochs=int(_required(training_raw, "epochs", "training")),
@@ -172,10 +222,17 @@ def load_config(path: Path) -> ExperimentConfig:
             ),
             learning_rate=float(_required(training_raw, "learning_rate", "training")),
             weight_decay=float(_required(training_raw, "weight_decay", "training")),
+            augmentation=augmentation,
         )
         inference = InferenceConfig(
-            confidence=float(_required(inference_raw, "confidence", "inference")),
+            candidate_confidence=float(
+                inference_raw.get("candidate_confidence", inference_raw.get("confidence", 0.20))
+            ),
             iou=float(_required(inference_raw, "iou", "inference")),
+        )
+        policy = DecisionPolicyConfig(
+            review_threshold=float(policy_raw.get("review_threshold", 0.20)),
+            accept_threshold=float(policy_raw.get("accept_threshold", 0.45)),
         )
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Cấu hình có kiểu dữ liệu không hợp lệ: {exc}") from exc
@@ -189,6 +246,16 @@ def load_config(path: Path) -> ExperimentConfig:
     _non_negative(training.workers, "training.workers")
     _positive(training.learning_rate, "training.learning_rate")
     _non_negative(training.weight_decay, "training.weight_decay")
-    _probability(inference.confidence, "inference.confidence")
+    for field_name in ("hsv_h", "hsv_s", "hsv_v", "translate", "scale"):
+        _non_negative(getattr(training.augmentation, field_name), f"training.{field_name}")
+    _non_negative(training.augmentation.degrees, "training.degrees")
+    for field_name in ("fliplr", "flipud", "mosaic", "mixup"):
+        _probability(getattr(training.augmentation, field_name), f"training.{field_name}")
+    _non_negative(training.augmentation.close_mosaic, "training.close_mosaic")
+    _probability(inference.candidate_confidence, "inference.candidate_confidence")
     _probability(inference.iou, "inference.iou")
-    return ExperimentConfig(project, data, model, training, inference)
+    _probability(policy.review_threshold, "policy.review_threshold")
+    _probability(policy.accept_threshold, "policy.accept_threshold")
+    if policy.review_threshold > policy.accept_threshold:
+        raise ValueError("policy.review_threshold không được lớn hơn policy.accept_threshold")
+    return ExperimentConfig(project, data, model, training, inference, policy)

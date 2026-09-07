@@ -5,15 +5,18 @@ kết nối và tự động hóa toàn bộ vòng đời ML theo chuẩn MLOps:
 1. data: Chuẩn hóa nhãn, lọc trùng SHA-256, gom nhóm pHash (BK-Tree), Group-aware Stratified Split.
 2. train: Huấn luyện mô hình YOLOv8 với siêu tham số quản lý từ file cấu hình YAML.
 3. evaluate: Đánh giá hiệu năng trên Validation set, tính mAP50, mAP50-95 và per-class metrics.
-4. compare: Xếp hạng và đề xuất Champion Model dựa trên Validation set (chống rò rỉ dữ liệu).
-5. errors: Phân tích phân bố lỗi theo kích thước tổn thương và bảng phân loại Error Taxonomy.
-6. test: Đánh giá mô hình cuối cùng trên tập Test bị khóa (--confirm-final-test).
-7. export: Xuất mô hình sang ONNX/TorchScript và kiểm định tương đương suy luận.
+4. errors: Phân tích phân bố lỗi theo kích thước tổn thương và bảng phân loại Error Taxonomy.
+5. test: Đánh giá mô hình cuối cùng trên tập Test bị khóa (--confirm-final-test).
+6. export: Xuất model + policy + metadata sang artifact versioned và kiểm định parity.
+
+Stage ``compare`` vẫn tồn tại để đọc các run cũ, nhưng không nằm trong canonical
+``run_all`` vì orchestrator không được tự chọn một file ``best.pt`` ngẫu nhiên.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import shutil
 import sys
@@ -27,8 +30,8 @@ import pandas as pd
 import yaml
 
 from .config import load_config
-from .constants import DEFAULT_ARCHIVES, SEED
-from .utils import configure_utf8_console, seed_everything, sha256_file
+from .constants import CLASS_NAMES, DEFAULT_ARCHIVES, SEED
+from .utils import configure_utf8_console, seed_everything, sha256_file, write_json
 
 logger = logging.getLogger("rice_leaf_pipeline")
 
@@ -79,11 +82,13 @@ class PipelineOrchestrator:
         audit_json = self.output_dir / "audit_report.json"
 
         # Đường dẫn mặc định cho training weights
-        train_run_dir = self.runs_dir / "train" / "yolov8n_baseline"
+        architecture = self.config.model.architecture if self.config else "yolov8s"
+        train_run_dir = self.runs_dir / "train" / f"{architecture}_640"
         best_weights = train_run_dir / "weights" / "best.pt"
         experiments_csv = self.runs_dir / "evaluate" / "experiments.csv"
         error_summary = self.runs_dir / "error_analysis" / "error_summary.json"
-        deployed_pt = self.artifacts_dir / "best.pt"
+        deployed_pt = self.artifacts_dir / "model.pt"
+        final_test_report = self.runs_dir / "evaluate" / "final_test_report.json"
 
         return {
             "data": StageDefinition(
@@ -109,7 +114,7 @@ class PipelineOrchestrator:
             ),
             "compare": StageDefinition(
                 name="compare",
-                description="Rank candidate models using Validation set to select champion",
+                description="Legacy report only; không thuộc canonical pipeline",
                 inputs=[experiments_csv],
                 outputs=[],
                 runner=self._run_compare_stage,
@@ -125,7 +130,7 @@ class PipelineOrchestrator:
                 name="test",
                 description="Execute locked final test evaluation protocol (one-time report)",
                 inputs=[best_weights, data_yaml],
-                outputs=[],
+                outputs=[final_test_report],
                 runner=self._run_test_stage,
                 requires_confirmation=True,
             ),
@@ -173,7 +178,6 @@ class PipelineOrchestrator:
         print("\n" + "=" * 80 + "\n")
 
     def _run_data_stage(self, force: bool = False) -> list[Path]:
-        from .annotations import build_class_map, parse_label_file  # noqa: F401
         from .deduplication import deduplicate_and_group
         from .prepare import (
             assign_splits,
@@ -202,7 +206,10 @@ class PipelineOrchestrator:
         return [data_yaml, manifest_csv, audit_json]
 
     def _run_train_stage(self, epochs: int | None = None, force: bool = False) -> list[Path]:
-        train_run_dir = self.runs_dir / "train" / "yolov8n_baseline"
+        if self.config is None:
+            raise RuntimeError("Không thể train khi config không được nạp")
+        architecture = self.config.model.architecture
+        train_run_dir = self.runs_dir / "train" / f"{architecture}_640"
         best_weights = train_run_dir / "weights" / "best.pt"
 
         if best_weights.exists() and not force:
@@ -217,25 +224,43 @@ class PipelineOrchestrator:
             raise FileNotFoundError(f"Thiếu {data_yaml}. Hãy chạy stage 'data' trước.")
 
         device = "0" if torch.cuda.is_available() else "cpu"
-        train_epochs = epochs if epochs is not None else 10  # Mặc định baseline nhanh gọn
-        batch = 16 if torch.cuda.is_available() else 4
+        train_epochs = epochs if epochs is not None else self.config.training.epochs
+        batch = (
+            self.config.training.batch_gpu
+            if torch.cuda.is_available()
+            else self.config.training.batch_cpu
+        )
+        augmentation = self.config.training.augmentation
 
-        model = YOLO("yolov8n.pt")
+        model = YOLO(self.config.model.weights)
         model.train(
             data=str(data_yaml),
             epochs=train_epochs,
             batch=batch,
-            imgsz=640,
+            imgsz=self.config.data.image_size,
             device=device,
-            optimizer="AdamW",
-            lr0=0.001,
+            optimizer=self.config.training.optimizer,
+            lr0=self.config.training.learning_rate,
+            weight_decay=self.config.training.weight_decay,
+            patience=self.config.training.patience,
+            hsv_h=augmentation.hsv_h,
+            hsv_s=augmentation.hsv_s,
+            hsv_v=augmentation.hsv_v,
+            degrees=augmentation.degrees,
+            translate=augmentation.translate,
+            scale=augmentation.scale,
+            fliplr=augmentation.fliplr,
+            flipud=augmentation.flipud,
+            mosaic=augmentation.mosaic,
+            mixup=augmentation.mixup,
+            close_mosaic=augmentation.close_mosaic,
             seed=SEED,
             deterministic=True,
             workers=0 if sys.platform == "win32" else 2,
             val=True,
             save=True,
             project=str(self.runs_dir / "train"),
-            name="yolov8n_baseline",
+            name=f"{architecture}_640",
             exist_ok=True,
             verbose=False,
         )
@@ -248,12 +273,13 @@ class PipelineOrchestrator:
 
         # Ghi metadata truy vết MLOps
         metadata = {
-            "run_name": "yolov8n_baseline",
+            "run_name": f"{architecture}_640",
             "data_yaml": str(data_yaml.resolve()),
             "data_manifest_sha256": sha256_file(self.output_dir / "manifest.csv"),
             "best_weights_sha256": sha256_file(best_weights),
             "seed": SEED,
             "epochs": train_epochs,
+            "architecture": architecture,
             "device": str(device),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
@@ -263,22 +289,16 @@ class PipelineOrchestrator:
         return [best_weights]
 
     def _find_best_weights(self) -> Path:
-        """Tìm trọng số best.pt tốt nhất hiện có trong runs_dir hoặc artifacts."""
-        candidate = self.artifacts_dir / "best.pt"
-        if candidate.exists():
-            return candidate
-
-        baseline = self.runs_dir / "train" / "yolov8n_baseline" / "weights" / "best.pt"
-        if baseline.exists():
-            return baseline
-
-        # Quét tất cả best.pt trong runs/train
-        all_weights = list((self.runs_dir / "train").glob("**/weights/best.pt"))
-        if all_weights:
-            return all_weights[0]
-
+        """Lấy đúng artifact của run canonical, không quét ``best.pt`` ngẫu nhiên."""
+        architecture = self.config.model.architecture if self.config else "yolov8s"
+        canonical = self.runs_dir / "train" / f"{architecture}_640" / "weights" / "best.pt"
+        if canonical.exists():
+            return canonical
+        release_model = self.artifacts_dir / "model.pt"
+        if release_model.exists():
+            return release_model
         raise FileNotFoundError(
-            "Không tìm thấy trọng số best.pt nào. Hãy chạy stage 'train' trước."
+            f"Không tìm thấy trọng số canonical tại {canonical}. Hãy chạy stage 'train' trước."
         )
 
     def _run_evaluate_stage(self, force: bool = False) -> list[Path]:
@@ -357,16 +377,21 @@ class PipelineOrchestrator:
             weights_path=best_weights,
             data_yaml_path=data_yaml,
             split="val",
+            confidence=self.config.policy.review_threshold if self.config else 0.20,
             output_dir=output_errors,
         )
         logger.info("Hoàn thành phân tích lỗi: %s", summary.get("total_predictions", 0))
         return [output_errors / "error_summary.json"]
 
-    def _run_test_stage(self, confirmed: bool = False) -> list[Path]:
+    def _run_test_stage(
+        self,
+        confirmed: bool = False,
+        force_reopen: bool = False,
+    ) -> list[Path]:
         if not confirmed:
             raise PermissionError(
-                "Tập Test bị khóa theo chuẩn MLOps. Hãy thêm cờ '--confirm-final-test' "
-                "khi đã chốt Champion Model để đánh giá khách quan đúng 1 lần."
+                "Tập Test bị khóa. Hãy thêm cờ '--confirm-final-test' sau khi đã "
+                "khóa model và policy."
             )
 
         from ultralytics import YOLO
@@ -374,6 +399,13 @@ class PipelineOrchestrator:
         best_weights = self._find_best_weights()
         data_yaml = self.output_dir / "data.yaml"
         output_eval = self.runs_dir / "evaluate"
+        final_report = output_eval / "final_test_report.json"
+        if final_report.exists() and not force_reopen:
+            raise FileExistsError(
+                f"Final test đã tồn tại tại {final_report}. "
+                "Dùng --force-reopen-test nếu thật sự cần mở lại; báo cáo sẽ bị "
+                "đánh dấu compromised."
+            )
 
         model = YOLO(str(best_weights))
         metrics = model.val(
@@ -399,17 +431,40 @@ class PipelineOrchestrator:
             "mAP50": float(metrics.box.map50),
             "mAP50-95": float(metrics.box.map),
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "model_hash": sha256_file(best_weights),
+            "test_compromised": bool(final_report.exists() and force_reopen),
         }
 
-        experiments_csv = output_eval / "experiments.csv"
-        if experiments_csv.exists():
-            history_df = pd.read_csv(experiments_csv)
-            current_df = pd.concat([history_df, pd.DataFrame([test_summary])], ignore_index=True)
-            current_df.to_csv(experiments_csv, index=False)
+        manifest_path = self.output_dir / "manifest.csv"
+        data_manifest_path = self.output_dir / "data_manifest.json"
+        test_summary["dataset_manifest_sha256"] = sha256_file(manifest_path)
+        if data_manifest_path.exists():
+            data_manifest = yaml.safe_load(data_manifest_path.read_text(encoding="utf-8")) or {}
+            test_summary["test_split_hash"] = data_manifest.get("split_hashes", {}).get("test")
+            test_summary["dataset_id"] = data_manifest.get("dataset_id")
+
+        # Final test là artifact bất biến; không trộn vào lịch sử dùng để chọn model.
+        final_report.write_text(
+            json.dumps(
+                {
+                    "model_version": "unreleased",
+                    "metrics": {
+                        "map50_95": test_summary["mAP50-95"],
+                        "map50": test_summary["mAP50"],
+                        "precision": test_summary["precision"],
+                        "recall": test_summary["recall"],
+                    },
+                    **test_summary,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
         print("\n--- KẾT QUẢ ĐÁNH GIÁ TẬP TEST CHÍNH THỨC (FINAL TEST METRICS) ---")
         print(pd.DataFrame([test_summary]).to_string(index=False))
-        return [output_eval / "test_final_evaluation"]
+        return [final_report]
 
     def _run_export_stage(self) -> list[Path]:
         from .export import export_model, verify_prediction_parity
@@ -417,8 +472,9 @@ class PipelineOrchestrator:
         best_weights = self._find_best_weights()
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Sao chép best.pt sang artifacts/best.pt phục vụ API/Dashboard
-        target_pt = self.artifacts_dir / "best.pt"
+        # 1. Sao chép trọng số canonical sang model.pt; không dùng tên chung
+        # best.pt để tránh runtime nạp nhầm model của run khác.
+        target_pt = self.artifacts_dir / "model.pt"
         if best_weights.resolve() != target_pt.resolve():
             shutil.copy2(best_weights, target_pt)
 
@@ -445,6 +501,37 @@ class PipelineOrchestrator:
                 f"Max Conf Diff={parity_report['max_conf_diff']:.4f}"
             )
 
+        if self.config is not None:
+            policy_path = self.artifacts_dir / "detection_policy.json"
+            write_json(
+                policy_path,
+                {
+                    "model_version": "unreleased",
+                    "review_threshold": self.config.policy.review_threshold,
+                    "accept_threshold": self.config.policy.accept_threshold,
+                    "candidate_confidence": self.config.inference.candidate_confidence,
+                    "iou": self.config.inference.iou,
+                },
+            )
+            write_json(
+                self.artifacts_dir / "model_metadata.json",
+                {
+                    "model_version": "unreleased",
+                    "architecture": self.config.model.architecture,
+                    "image_size": self.config.data.image_size,
+                    "classes": CLASS_NAMES,
+                    "weights_sha256": sha256_file(target_pt),
+                    "training_config_sha256": sha256_file(self.config_path),
+                    "dataset_manifest_sha256": (
+                        sha256_file(self.output_dir / "manifest.csv")
+                        if (self.output_dir / "manifest.csv").exists()
+                        else None
+                    ),
+                    "policy_sha256": sha256_file(policy_path),
+                    "policy_file": str(policy_path.resolve()),
+                },
+            )
+
         return [target_pt, target_exported]
 
     def execute_stage(
@@ -453,6 +540,7 @@ class PipelineOrchestrator:
         force: bool = False,
         epochs: int | None = None,
         confirm_final_test: bool = False,
+        force_reopen_test: bool = False,
     ) -> PipelineStatus:
         """Thực thi một stage duy nhất và kiểm tra lỗi."""
         stages = self.get_stages()
@@ -481,7 +569,10 @@ class PipelineOrchestrator:
             elif stage_name == "evaluate":
                 produced = stage.runner(force=force)
             elif stage_name == "test":
-                produced = stage.runner(confirmed=confirm_final_test)
+                produced = stage.runner(
+                    confirmed=confirm_final_test,
+                    force_reopen=force_reopen_test,
+                )
             else:
                 produced = stage.runner()
 
@@ -510,11 +601,14 @@ class PipelineOrchestrator:
         force: bool = False,
         epochs: int | None = None,
         confirm_final_test: bool = False,
+        force_reopen_test: bool = False,
     ) -> list[PipelineStatus]:
         """Chạy toàn bộ quy trình pipeline theo thứ tự chuẩn."""
-        sequence = ["data", "train", "evaluate", "compare", "errors", "export"]
+        # compare là tool legacy, không nằm trong đường chạy canonical.
+        sequence = ["data", "train", "evaluate", "errors"]
         if confirm_final_test:
-            sequence.insert(5, "test")
+            sequence.append("test")
+        sequence.append("export")
 
         results = []
         for stg in sequence:
@@ -523,6 +617,7 @@ class PipelineOrchestrator:
                 force=force,
                 epochs=epochs,
                 confirm_final_test=confirm_final_test,
+                force_reopen_test=force_reopen_test,
             )
             results.append(status)
             if status.status == "FAILED":
@@ -583,6 +678,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Xác nhận mở khóa đánh giá tập Test chính thức",
     )
+    parser.add_argument(
+        "--force-reopen-test",
+        action="store_true",
+        help="Mở lại final test đã có báo cáo và đánh dấu test_compromised=true",
+    )
     return parser.parse_args()
 
 
@@ -605,6 +705,7 @@ def main() -> None:
             force=args.force,
             epochs=args.epochs,
             confirm_final_test=args.confirm_final_test,
+            force_reopen_test=args.force_reopen_test,
         )
     else:
         status = orchestrator.execute_stage(
@@ -612,6 +713,7 @@ def main() -> None:
             force=args.force,
             epochs=args.epochs,
             confirm_final_test=args.confirm_final_test,
+            force_reopen_test=args.force_reopen_test,
         )
         orchestrator._print_summary([status])
 

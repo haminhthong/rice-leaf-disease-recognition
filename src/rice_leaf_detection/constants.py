@@ -6,6 +6,7 @@ seed cố định và các định dạng file ảnh được hỗ trợ.
 """
 
 from pathlib import Path
+from typing import Literal
 
 # Hạt giống ngẫu nhiên dùng chung để các lần chạy có thể tái lập.
 SEED: int = 42
@@ -18,6 +19,20 @@ CLASS_NAMES_VI: dict[int, str] = {
     0: "Bạc lá lúa",
     1: "Đốm nâu",
 }
+
+# Trạng thái annotation được ghi trong manifest. Ảnh chỉ được đưa vào dataset
+# huấn luyện khi trạng thái đã được xác minh rõ ràng.
+AnnotationStatus = Literal[
+    "TARGET_POSITIVE",
+    "TRUE_NEGATIVE",
+    "OUT_OF_SCOPE_NEGATIVE",
+    "INVALID_OR_MISSING",
+]
+
+TARGET_POSITIVE = "TARGET_POSITIVE"
+TRUE_NEGATIVE = "TRUE_NEGATIVE"
+OUT_OF_SCOPE_NEGATIVE = "OUT_OF_SCOPE_NEGATIVE"
+INVALID_OR_MISSING = "INVALID_OR_MISSING"
 
 # Các phần mở rộng ảnh được pipeline dữ liệu chấp nhận.
 IMAGE_EXTENSIONS: set[str] = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}

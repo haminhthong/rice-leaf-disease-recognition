@@ -7,6 +7,7 @@ data:
   image_size: 640
 
 model:
+  architecture: yolov8s
   weights: yolov8s.pt
 
 training:
@@ -18,8 +19,25 @@ training:
   optimizer: AdamW
   learning_rate: 0.001
   weight_decay: 0.0005
+  # Augmentation chỉ chạy trên train; val/test dùng preprocessing tất định.
+  hsv_h: 0.005
+  hsv_s: 0.25
+  hsv_v: 0.20
+  degrees: 10
+  translate: 0.05
+  scale: 0.15
+  fliplr: 0.50
+  flipud: 0.00
+  mosaic: 0.20
+  mixup: 0.00
+  close_mosaic: 10
 
 inference:
-  confidence: 0.25
+  # Ngưỡng thấp nhất để lấy candidate; không phải ngưỡng kết luận bệnh.
+  candidate_confidence: 0.20
   iou: 0.45
 
+policy:
+  # Hai giá trị này phải được tune trên Validation trước khi release.
+  review_threshold: 0.20
+  accept_threshold: 0.45

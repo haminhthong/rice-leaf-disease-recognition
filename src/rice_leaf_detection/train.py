@@ -85,8 +85,11 @@ def main() -> None:
             raise FileNotFoundError(
                 f"Không tìm thấy {args.data}. Hãy chạy lệnh rice-prepare trước."
             )
-        run_name = args.name or f"yolov8s_{time.strftime('%Y%m%d_%H%M%S')}"
+        run_name = args.name or (
+            f"{config.model.architecture}_640_{time.strftime('%Y%m%d_%H%M%S')}"
+        )
         model = YOLO(args.model)
+        augmentation = config.training.augmentation
         model.train(
             data=str(args.data),
             epochs=args.epochs,
@@ -100,6 +103,19 @@ def main() -> None:
             seed=seed,
             deterministic=True,
             workers=args.workers,
+            # Truyền policy augmentation từ YAML vào Ultralytics một cách tường
+            # minh; validation/test không nhận các tham số augmentation này.
+            hsv_h=augmentation.hsv_h,
+            hsv_s=augmentation.hsv_s,
+            hsv_v=augmentation.hsv_v,
+            degrees=augmentation.degrees,
+            translate=augmentation.translate,
+            scale=augmentation.scale,
+            fliplr=augmentation.fliplr,
+            flipud=augmentation.flipud,
+            mosaic=augmentation.mosaic,
+            mixup=augmentation.mixup,
+            close_mosaic=augmentation.close_mosaic,
             val=True,
             save=True,
             save_period=10,
@@ -150,9 +166,14 @@ def main() -> None:
             "batch_size": batch,
             "image_size": args.imgsz,
             "model": args.model,
+            "architecture": config.model.architecture,
             "device": str(device),
             "python_version": sys.version,
             "ultralytics_version": ultralytics.__version__,
+            "augmentation": {
+                field: getattr(config.training.augmentation, field)
+                for field in config.training.augmentation.__dataclass_fields__
+            },
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         metadata_path = run_dir / "run_metadata.json"

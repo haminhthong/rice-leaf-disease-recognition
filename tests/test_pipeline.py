@@ -90,6 +90,7 @@ def test_pipeline_run_all_success() -> None:
         ),
     ) as mock_exec:
         results = orchestrator.run_all(confirm_final_test=True)
-        assert len(results) == 7
+        # compare là tool legacy, không còn nằm trong canonical run_all.
+        assert len(results) == 6
         assert all(r.status == "SUCCESS" for r in results)
-        assert mock_exec.call_count == 7
+        assert mock_exec.call_count == 6

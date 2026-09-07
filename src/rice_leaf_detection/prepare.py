@@ -9,6 +9,8 @@ Pipeline bao gồm các công đoạn:
 """
 
 import argparse
+import hashlib
+import json
 import re
 import shutil
 from collections import Counter, defaultdict
@@ -18,11 +20,27 @@ from typing import Any
 import pandas as pd
 import yaml
 from PIL import Image
-from sklearn.model_selection import train_test_split
-from tqdm import tqdm
 
-from .annotations import build_class_map, parse_label_file
-from .constants import CLASS_NAMES, DEFAULT_ARCHIVES, IMAGE_EXTENSIONS, SEED, SPLIT_RATIOS, SPLITS
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - fallback cho môi trường tối giản
+    def tqdm(iterable: Any, **_: Any) -> Any:
+        """Fallback không hiển thị progress khi tqdm chưa được cài."""
+        return iterable
+
+from .annotations import build_class_map, parse_label_file_detailed
+from .constants import (
+    CLASS_NAMES,
+    DEFAULT_ARCHIVES,
+    IMAGE_EXTENSIONS,
+    INVALID_OR_MISSING,
+    OUT_OF_SCOPE_NEGATIVE,
+    SEED,
+    SPLIT_RATIOS,
+    SPLITS,
+    TARGET_POSITIVE,
+    TRUE_NEGATIVE,
+)
 from .deduplication import deduplicate_and_group
 from .utils import (
     configure_utf8_console,
@@ -77,6 +95,10 @@ def prepare_sources(archives: list[Path], extract_root: Path) -> list[dict[str, 
                 "name": name,
                 "root": locate_dataset_root(destination),
                 "archive": str(archive.resolve()),
+                "archive_sha256": sha256_file(archive),
+                "source_url": None,
+                "source_version": None,
+                "license": "unknown/pending verification",
             }
         )
     return sources
@@ -96,10 +118,38 @@ def collect_records(
         "polygon_count": 0,
         "bbox_count": 0,
         "source_classes": {},
+        "source_annotation_audit": [],
+        "unknown_class_lines": 0,
+        "annotation_status_counts": Counter(),
+        "quarantined_records": [],
+        "dataset_sources": [
+            {
+                "source_id": source["name"],
+                "source_url": source.get("source_url"),
+                "source_version": source.get("source_version"),
+                "license": source.get("license", "unknown/pending verification"),
+                "archive": source.get("archive"),
+                "archive_sha256": source.get("archive_sha256"),
+            }
+            for source in sources
+        ],
     }
     for source in sources:
         names, class_map = build_class_map(source["root"])
         audit["source_classes"][source["name"]] = {"names": names, "old_to_new": class_map}
+        audit["source_annotation_audit"].append(
+            {
+                "source": source["name"],
+                "annotation_unit": "unknown",
+                "target_classes": CLASS_NAMES,
+                "compatible": "pending_manual_review",
+                "reviewed_images": 0,
+                "note": (
+                    "Cần kiểm tra thủ công box là symptomatic_region trước khi release; "
+                    "polygon_to_bbox không phải disease severity area."
+                ),
+            }
+        )
         for old_split in ("train", "valid", "val", "test"):
             image_dir = source["root"] / old_split / "images"
             label_dir = source["root"] / old_split / "labels"
@@ -114,8 +164,11 @@ def collect_records(
                 label_path = label_dir / f"{image_path.stem}.txt"
                 if not label_path.exists():
                     audit["missing_label_files"].append(str(label_path))
-                annotations, errors, duplicate_count = parse_label_file(label_path, class_map)
+                annotations, errors, duplicate_count, unknown_class_count = (
+                    parse_label_file_detailed(label_path, class_map)
+                )
                 audit["invalid_labels"].extend(errors)
+                audit["unknown_class_lines"] += unknown_class_count
                 audit["duplicate_annotation_lines_removed"] += duplicate_count
                 audit["clipped_boxes"] += sum(
                     str(annotation["source_type"]).endswith("_clipped")
@@ -126,7 +179,30 @@ def collect_records(
                         audit["polygon_count"] += 1
                     else:
                         audit["bbox_count"] += 1
-                if not annotations and not keep_negatives:
+                if not label_path.exists() or errors:
+                    annotation_status = INVALID_OR_MISSING
+                elif annotations:
+                    annotation_status = TARGET_POSITIVE
+                elif unknown_class_count > 0:
+                    annotation_status = OUT_OF_SCOPE_NEGATIVE
+                else:
+                    # File nhãn rỗng tồn tại là negative đã được xác minh.
+                    annotation_status = TRUE_NEGATIVE
+
+                audit["annotation_status_counts"][annotation_status] += 1
+                if annotation_status == INVALID_OR_MISSING:
+                    audit["quarantined_records"].append(
+                        {
+                            "image_path": str(image_path),
+                            "label_path": str(label_path),
+                            "status": annotation_status,
+                            "errors": errors,
+                        }
+                    )
+                    # Tuyệt đối không để annotation thiếu/lỗi trở thành label rỗng.
+                    continue
+
+                if annotation_status != TARGET_POSITIVE and not keep_negatives:
                     continue
                 try:
                     with Image.open(image_path) as image:
@@ -138,6 +214,8 @@ def collect_records(
                     continue
                 records.append(
                     {
+                        "image_id": f"{source['name']}__{image_path.stem}",
+                        "source_image_id": image_path.stem,
                         "source": source["name"],
                         "old_split": old_split,
                         "image_path": str(image_path),
@@ -147,49 +225,139 @@ def collect_records(
                         "sha256": sha256_file(image_path),
                         "phash": phash,
                         "original_key": (f"{source['name']}:{image_path.stem.split('.rf.')[0]}"),
+                        "capture_group": f"{source['name']}:{image_path.stem.split('.rf.')[0]}",
+                        "annotation_status": annotation_status,
+                        "has_target_class": bool(annotations),
+                        "has_non_target_class": unknown_class_count > 0,
                         "annotations": annotations,
                     }
                 )
     if not records:
         raise RuntimeError("Không tìm thấy ảnh hợp lệ trong các bộ dữ liệu nguồn")
+    audit["annotation_status_counts"] = dict(audit["annotation_status_counts"])
     return records, audit
 
 
-def _presence(group: list[Record]) -> str:
-    classes = sorted({ann["class_id"] for record in group for ann in record["annotations"]})
-    return "negative" if not classes else "classes_" + "_".join(map(str, classes))
+def _group_summary(group: list[Record]) -> dict[str, Any]:
+    """Tổng hợp tín hiệu dùng cho split-aware theo nhóm, nguồn và lớp."""
+    source_counts = Counter(record["source"] for record in group)
+    status_counts = Counter(
+        record.get(
+            "annotation_status",
+            TARGET_POSITIVE if record.get("annotations") else TRUE_NEGATIVE,
+        )
+        for record in group
+    )
+    class_counts = Counter(
+        int(annotation["class_id"])
+        for record in group
+        for annotation in record["annotations"]
+    )
+    return {
+        "images": len(group),
+        "sources": source_counts,
+        "statuses": status_counts,
+        "classes": class_counts,
+    }
 
 
-def _split(
-    items: list[str],
-    size: float,
-    strata: list[str],
-    seed: int,
-) -> tuple[list[str], list[str]]:
-    if len(items) < 2:
-        raise ValueError("Không đủ nhóm ảnh để chia dữ liệu")
-    counts = Counter(strata)
-    adjusted = [value if counts[value] >= 2 else "rare" for value in strata]
-    adjusted_counts = Counter(adjusted)
-    stratify = adjusted if len(adjusted_counts) > 1 and min(adjusted_counts.values()) >= 2 else None
-    return train_test_split(items, test_size=size, random_state=seed, stratify=stratify)
+def _split_loss(
+    current: dict[str, float],
+    addition: dict[str, float],
+    target: dict[str, float],
+) -> float:
+    """Đo độ lệch tương đối sau khi gán một group vào một split."""
+    loss = 0.0
+    for key, expected in target.items():
+        if expected <= 0:
+            continue
+        observed = current.get(key, 0.0) + addition.get(key, 0.0)
+        loss += ((observed - expected) / expected) ** 2
+    return loss
 
 
-def assign_splits(records: list[Record]) -> None:
-    grouped = defaultdict(list)
+def assign_splits(records: list[Record], seed: int = SEED) -> None:
+    """Chia Group + Source + Class aware bằng greedy assignment tất định.
+
+    Invariant quan trọng nhất là toàn bộ record trong một ``group_id`` luôn đi
+    vào cùng một split. Hàm tối ưu đồng thời số ảnh, số instance từng lớp,
+    nguồn dữ liệu và loại negative; không dùng test để tune model.
+    """
+    if not records:
+        raise ValueError("Không có record để chia dữ liệu")
+
+    grouped: dict[str, list[Record]] = defaultdict(list)
     for record in records:
         grouped[record["group_id"]].append(record)
-    group_ids = sorted(grouped)
-    strata = [_presence(grouped[group]) for group in group_ids]
-    holdout_ratio = SPLIT_RATIOS["val"] + SPLIT_RATIOS["test"]
-    train, holdout = _split(group_ids, holdout_ratio, strata, SEED)
-    holdout_strata = [_presence(grouped[group]) for group in holdout]
-    val, test = _split(holdout, SPLIT_RATIOS["test"] / holdout_ratio, holdout_strata, SEED + 1)
-    assignments = {group: "train" for group in train}
-    assignments.update({group: "val" for group in val})
-    assignments.update({group: "test" for group in test})
+    if len(grouped) < 3:
+        raise ValueError("Cần ít nhất 3 group độc lập để tạo train/val/test")
+
+    summaries = {group_id: _group_summary(items) for group_id, items in grouped.items()}
+    sources = sorted({record["source"] for record in records})
+    dimensions = ["images"]
+    dimensions.extend(f"class_{class_id}" for class_id in range(len(CLASS_NAMES)))
+    dimensions.extend(f"source_{source}" for source in sources)
+    dimensions.extend(f"status_{status}" for status in (TRUE_NEGATIVE, OUT_OF_SCOPE_NEGATIVE))
+
+    total: dict[str, float] = {dimension: 0.0 for dimension in dimensions}
+    vectors: dict[str, dict[str, float]] = {}
+    for group_id, summary in summaries.items():
+        vector = {dimension: 0.0 for dimension in dimensions}
+        vector["images"] = float(summary["images"])
+        for class_id, count in summary["classes"].items():
+            vector[f"class_{class_id}"] = float(count)
+        for source, count in summary["sources"].items():
+            vector[f"source_{source}"] = float(count)
+        for status, count in summary["statuses"].items():
+            if f"status_{status}" in vector:
+                vector[f"status_{status}"] = float(count)
+        vectors[group_id] = vector
+        for dimension, value in vector.items():
+            total[dimension] += value
+
+    target_by_split = {
+        split: {dimension: total[dimension] * SPLIT_RATIOS[split] for dimension in dimensions}
+        for split in SPLITS
+    }
+    assigned: dict[str, str] = {}
+    current = {split: {dimension: 0.0 for dimension in dimensions} for split in SPLITS}
+    group_counts = {split: 0 for split in SPLITS}
+
+    # Đưa group lớn/đa lớp lên trước để greedy assignment không dồn lệch vào
+    # một split. seed chỉ dùng để phá hòa một cách tái lập.
+    ordered_groups = sorted(
+        grouped,
+        key=lambda group_id: (
+            -vectors[group_id]["images"],
+            -sum(vectors[group_id][key] for key in dimensions if key.startswith("class_")),
+            group_id,
+        ),
+    )
+    rotation = seed % len(ordered_groups)
+    ordered_groups = ordered_groups[rotation:] + ordered_groups[:rotation]
+
+    for position, group_id in enumerate(ordered_groups):
+        remaining = len(ordered_groups) - position
+        empty_splits = [split for split in SPLITS if group_counts[split] == 0]
+        if remaining == len(empty_splits) and empty_splits:
+            candidate_splits = empty_splits
+        else:
+            candidate_splits = list(SPLITS)
+        chosen = min(
+            candidate_splits,
+            key=lambda split: (
+                _split_loss(current[split], vectors[group_id], target_by_split[split]),
+                group_counts[split],
+                split,
+            ),
+        )
+        assigned[group_id] = chosen
+        group_counts[chosen] += 1
+        for dimension, value in vectors[group_id].items():
+            current[chosen][dimension] += value
+
     for record in records:
-        record["split"] = assignments[record["group_id"]]
+        record["split"] = assigned[record["group_id"]]
 
 
 def _safe_name(record: Record) -> str:
@@ -215,6 +383,12 @@ def write_dataset(
     rows = []
     for record in tqdm(records, desc="Ghi dataset sạch"):
         name, split = _safe_name(record), record["split"]
+        annotation_status = record.get(
+            "annotation_status",
+            TARGET_POSITIVE if record.get("annotations") else TRUE_NEGATIVE,
+        )
+        has_target_class = bool(record.get("has_target_class", record.get("annotations")))
+        has_non_target_class = bool(record.get("has_non_target_class", False))
         relative_image = Path(split) / "images" / name
         shutil.copy2(record["image_path"], temporary / relative_image)
         label = temporary / split / "labels" / f"{Path(name).stem}.txt"
@@ -228,6 +402,11 @@ def write_dataset(
         counts = Counter(a["class_id"] for a in record["annotations"])
         rows.append(
             {
+                "image_id": record.get(
+                    "image_id",
+                    f"{record['source']}:{Path(record['image_path']).stem}",
+                ),
+                "source_image_id": record.get("source_image_id", Path(record["image_path"]).stem),
                 "split": split,
                 "source": record["source"],
                 "old_split": record["old_split"],
@@ -239,9 +418,21 @@ def write_dataset(
                 "phash": record["phash"],
                 "width": record["width"],
                 "height": record["height"],
-                "is_negative": not record["annotations"],
+                "annotation_status": annotation_status,
+                "has_target_class": has_target_class,
+                "has_non_target_class": has_non_target_class,
+                "negative_type": (
+                    annotation_status
+                    if annotation_status != TARGET_POSITIVE
+                    else ""
+                ),
+                # Giữ cột cũ cho các dashboard hiện hữu, nhưng semantics đã
+                # được làm rõ: âm tính nghĩa là không có target bbox đã parse.
+                "is_negative": annotation_status != TARGET_POSITIVE,
                 "instances_class_0": counts[0],
                 "instances_class_1": counts[1],
+                "class_0_instances": counts[0],
+                "class_1_instances": counts[1],
             }
         )
     frame = pd.DataFrame(rows)
@@ -281,6 +472,36 @@ def write_dataset(
     }
 
     frame.to_csv(temporary / "manifest.csv", index=False)
+    split_hashes = {}
+    for split in SPLITS:
+        subset = frame[frame["split"] == split]
+        lines = [
+            f"{row.image_id}|{row.group_id}|{row.sha256}"
+            for row in subset.sort_values("image_id").itertuples(index=False)
+        ]
+        split_hashes[split] = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+    manifest_metadata = {
+        "schema_version": 2,
+        "dataset_id": None,
+        "classes": {str(index): name for index, name in enumerate(CLASS_NAMES)},
+        "split_seed": SEED,
+        "split_ratios": SPLIT_RATIOS,
+        "split_hashes": split_hashes,
+        "dataset_sources": audit.get("dataset_sources", []),
+        "audit": {
+            "missing_annotations": len(audit.get("missing_label_files", [])),
+            "invalid_annotations": len(audit.get("invalid_labels", [])),
+            "annotation_conflicts": len(audit.get("annotation_conflicts", [])),
+            "quarantined_records": len(audit.get("quarantined_records", [])),
+            "cross_split_duplicate_groups": 0,
+        },
+    }
+    split_hash = hashlib.sha256(
+        json.dumps(split_hashes, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
+    manifest_metadata["dataset_id"] = f"rice-v2-{split_hash}"
+    write_json(temporary / "data_manifest.json", manifest_metadata)
+    write_json(temporary / "source_annotation_audit.json", audit["source_annotation_audit"])
     write_json(temporary / "audit_report.json", audit)
     yaml_config = {
         "path": output.resolve().as_posix(),
@@ -349,6 +570,12 @@ def validate_split_sizes(manifest: pd.DataFrame) -> None:
 def validate_dataset(manifest: pd.DataFrame, output: Path) -> None:
     if manifest.empty:
         raise ValueError("Manifest không có dữ liệu")
+    if "annotation_status" in manifest.columns:
+        invalid = manifest[manifest["annotation_status"] == INVALID_OR_MISSING]
+        if not invalid.empty:
+            raise ValueError(
+                "Manifest chứa annotation thiếu/lỗi; các record này phải bị quarantine"
+            )
     if manifest.groupby("group_id")["split"].nunique().max() != 1:
         raise ValueError("Có nhóm ảnh xuất hiện ở nhiều tập dữ liệu")
     if manifest.groupby("sha256")["split"].nunique().max() != 1:

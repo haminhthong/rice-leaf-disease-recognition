@@ -19,11 +19,11 @@ data/
 
 - **Dataset Nguồn 1**: `RiceLeafAnnotatedDataset.zip`
   - Nguồn: Bộ dữ liệu gán nhãn phát hiện triệu chứng bệnh lá lúa công khai.
-  - License: CC BY 4.0 / Public Domain.
+  - License: `unknown/pending verification` (chưa có bằng chứng license theo archive trong repo).
   - Mục đích: Cung cấp các ảnh tổn thương Bạc lá lúa và Đốm nâu.
 - **Dataset Nguồn 2**: `dataset1.zip`
   - Nguồn: Bộ dữ liệu gán nhãn bổ sung với các điều kiện góc chụp và ánh sáng thực tế.
-  - License: CC BY 4.0 / Public Domain.
+  - License: `unknown/pending verification` (chưa có bằng chứng license theo archive trong repo).
 
 ---
 
@@ -33,8 +33,11 @@ data/
 > Mỗi Bounding Box biểu diễn **vùng triệu chứng bệnh quan sát được trên phiến lá (visible symptomatic region associated with target disease)** theo tọa độ chuẩn hóa $[x_{center}, y_{center}, w, h] \in [0, 1]$.
 
 - **Đơn vị gán nhãn**: Vùng tổn thương đại diện (representative symptomatic region).
-- **Quy ước Negative Samples (Ảnh khỏe mạnh / Không bệnh mục tiêu)**:
-  Trong bài toán Object Detection, một lá không có triệu chứng mục tiêu hoặc lá khỏe mạnh được đại diện bằng một **tệp nhãn rỗng (0 bounding box)**. Không có class riêng cho lá khỏe mạnh; mô hình sẽ đưa ra trạng thái `no_detection` khi không tìm thấy vùng tổn thương vượt ngưỡng tin cậy.
+- **Quy ước Negative Samples**:
+  - `TRUE_NEGATIVE`: file nhãn rỗng tồn tại và đã được xác minh, có thể đưa vào train.
+  - `OUT_OF_SCOPE_NEGATIVE`: chỉ có class bệnh ngoài phạm vi, có thể dùng làm hard negative và phải ghi rõ provenance.
+  - `INVALID_OR_MISSING`: thiếu file hoặc annotation lỗi, luôn quarantine và không đưa vào train.
+  Không có class riêng cho lá khỏe mạnh; runtime trả `NO_SUPPORTED_SYMPTOM_DETECTED`, không khẳng định lá khỏe.
 
 ---
 
@@ -55,6 +58,7 @@ data/
    - Thống kê phân bố diện tích tổn thương (Small $< 0.05$, Medium $0.05 - 0.2$, Large $> 0.2$).
    - Ghi nhận số lượng `bbox_count`, `polygon_count`, và `clipped_boxes`.
 7. **Split Size Validation**: Đảm bảo số lượng nhóm tối thiểu (`train` $\ge 10$, `val` $\ge 5$, `test` $\ge 5$) và số lượng instance từng lớp tối thiểu trong `val` và `test` ($\ge 20$ instances/lớp).
+8. **Immutable manifest**: Sinh `manifest.csv`, `data_manifest.json` (schema version, source/archive hash, split hash) và `source_annotation_audit.json` để không nhầm provenance hoặc semantics giữa các nguồn.
 
 ---
 

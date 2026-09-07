@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from rice_leaf_detection.inference import RiceLeafDetector
+from rice_leaf_detection.inference import DetectionPolicy, RiceLeafDetector
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +25,14 @@ logger = logging.getLogger(__name__)
 def load_detector(
     weights_path: str,
     image_size: int,
+    review_threshold: float,
+    accept_threshold: float,
 ) -> RiceLeafDetector:
     """Tái sử dụng mô hình giữa các lần Streamlit chạy lại giao diện."""
     return RiceLeafDetector(
         Path(weights_path),
         image_size=image_size,
+        policy=DetectionPolicy(review_threshold, accept_threshold),
     )
 
 
@@ -48,12 +51,30 @@ st.caption(
 
 
 st.sidebar.header("⚙️ Cấu Hình Mô Hình")
-weights_path_env = os.getenv("RICE_MODEL_PATH", "artifacts/best.pt")
+weights_path_env = os.getenv("RICE_MODEL_PATH", "artifacts/model.pt")
 weights = Path(st.sidebar.text_input("Trọng số mô hình (.pt):", weights_path_env))
 
-confidence = st.sidebar.slider("Ngưỡng tin cậy (Confidence Threshold):", 0.05, 0.95, 0.25, 0.05)
-iou = st.sidebar.slider("Ngưỡng NMS IoU (IoU Threshold):", 0.10, 0.90, 0.45, 0.05)
+candidate_confidence = min(
+    max(float(os.getenv("RICE_CANDIDATE_CONFIDENCE", "0.20")), 0.05),
+    0.95,
+)
+confidence = st.sidebar.slider(
+    "Ngưỡng lấy candidate (Candidate Score):",
+    0.05,
+    0.95,
+    candidate_confidence,
+    0.05,
+)
+iou = st.sidebar.slider(
+    "Ngưỡng NMS IoU (IoU Threshold):",
+    0.10,
+    0.90,
+    float(os.getenv("RICE_IOU", "0.45")),
+    0.05,
+)
 image_size = int(os.getenv("RICE_IMAGE_SIZE", "640"))
+review_threshold = float(os.getenv("RICE_REVIEW_THRESHOLD", "0.20"))
+accept_threshold = float(os.getenv("RICE_ACCEPT_THRESHOLD", "0.45"))
 
 st.sidebar.markdown("---")
 st.sidebar.info(
@@ -101,7 +122,7 @@ with tab_infer:
             if not weights.exists():
                 st.warning(
                     f"⚠️ Chưa tìm thấy file trọng số mô hình tại `{weights}`.\n\n"
-                    "Hãy chạy huấn luyện hoặc đặt file `best.pt` vào thư mục `artifacts/`."
+                    "Hãy chạy huấn luyện và export artifact canonical vào thư mục `artifacts/`."
                 )
             else:
                 with st.spinner("Đang chạy mô hình YOLOv8 phân tích..."):
@@ -109,6 +130,8 @@ with tab_infer:
                         detector = load_detector(
                             str(weights),
                             image_size,
+                            review_threshold,
+                            accept_threshold,
                         )
                         prediction, result = detector.predict(
                             image_np,
@@ -116,12 +139,20 @@ with tab_infer:
                             iou=iou,
                         )
 
-                        if prediction.status == "no_detection" or not prediction.detections:
+                        if prediction.status in {
+                            "NO_SUPPORTED_SYMPTOM_DETECTED",
+                            "no_detection",
+                        }:
                             st.warning(f"⚠️ {prediction.message}")
                             for w in prediction.warnings:
                                 st.caption(f"• {w}")
                         else:
-                            st.success(f"✅ {prediction.message}")
+                            if prediction.status == "REVIEW_REQUIRED":
+                                st.warning(f"⚠️ {prediction.message}")
+                            else:
+                                st.success(f"✅ {prediction.message}")
+                            for w in prediction.warnings:
+                                st.caption(f"• {w}")
 
                             if prediction.image_summary is not None:
                                 summary = prediction.image_summary
@@ -156,7 +187,8 @@ with tab_infer:
                                         "STT": idx,
                                         "Lớp Bệnh (Tiếng Việt)": det.class_name_vi,
                                         "Tên Tiếng Anh": det.class_name,
-                                        "Điểm Phát Hiện (Score)": f"{det.confidence:.1%}",
+                                        "Điểm Phát Hiện (Score)": f"{det.score:.1%}",
+                                        "Quyết Định": det.decision,
                                         "Tọa Độ (x1, y1, x2, y2)": (
                                             f"({det.box_xyxy[0]:.1f}, {det.box_xyxy[1]:.1f}, "
                                             f"{det.box_xyxy[2]:.1f}, {det.box_xyxy[3]:.1f})"
