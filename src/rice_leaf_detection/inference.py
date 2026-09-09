@@ -18,8 +18,6 @@ PredictionStatus = Literal[
     "DETECTED",
     "REVIEW_REQUIRED",
     "NO_SUPPORTED_SYMPTOM_DETECTED",
-    "detected",
-    "no_detection",
 ]
 
 
@@ -116,6 +114,24 @@ class DetectionPolicy:
         return detections
 
 
+def load_detection_policy(
+    policy_path: Path | str,
+    fallback: DetectionPolicy,
+) -> DetectionPolicy:
+    """Đọc policy cạnh artifact; dùng fallback khi model chưa được export."""
+    path = Path(policy_path)
+    if not path.exists():
+        return fallback
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return DetectionPolicy(
+            review_threshold=float(payload["review_threshold"]),
+            accept_threshold=float(payload["accept_threshold"]),
+        )
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Policy artifact không hợp lệ: {path}") from exc
+
+
 @dataclass(frozen=True)
 class ImageSummary:
     """Tóm tắt phân tích mức ảnh phục vụ hỗ trợ trinh sát đồng ruộng (Decision Support)."""
@@ -174,9 +190,7 @@ class RiceLeafDetector:
         self.policy = policy or DetectionPolicy(
             review_threshold=confidence if review_threshold is None else review_threshold,
             accept_threshold=(
-                max(confidence, 0.45)
-                if accept_threshold is None
-                else accept_threshold
+                max(confidence, 0.45) if accept_threshold is None else accept_threshold
             ),
         )
         self._verify_policy_contract(weights_path)
@@ -240,9 +254,7 @@ class RiceLeafDetector:
                 - Object `Prediction` đã được cấu trúc hóa kèm `ImageSummary`.
                 - Đối tượng `Results` gốc của Ultralytics (phục vụ vẽ bounding box `.plot()`).
         """
-        candidate_confidence = (
-            self.candidate_confidence if confidence is None else confidence
-        )
+        candidate_confidence = self.candidate_confidence if confidence is None else confidence
         nms_iou = self.iou if iou is None else iou
         if not 0 <= candidate_confidence <= 1:
             raise ValueError("Ngưỡng tin cậy phải nằm trong khoảng [0, 1]")

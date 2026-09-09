@@ -81,6 +81,16 @@ def match_detections(
         best_same_idx, best_same_iou = max(
             same_class_candidates, key=lambda item: item[1], default=(-1, 0.0)
         )
+        unmatched_same_candidates = [
+            (index, overlap)
+            for index, overlap in same_class_candidates
+            if index not in matched_ground_truth
+        ]
+        best_unmatched_idx, best_unmatched_iou = max(
+            unmatched_same_candidates,
+            key=lambda item: item[1],
+            default=(-1, 0.0),
+        )
 
         # 2. Tìm ứng viên tốt nhất trên mọi lớp (để phát hiện nhầm lớp)
         all_candidates = [
@@ -91,11 +101,13 @@ def match_detections(
             all_candidates, key=lambda item: item[1], default=(-1, 0.0, -1)
         )
 
-        if best_same_iou >= iou_threshold:
-            if best_same_idx not in matched_ground_truth:
-                matched_ground_truth.add(best_same_idx)
-                counts["true_positive"] += 1
-            else:
+        if best_unmatched_iou >= iou_threshold:
+            matched_ground_truth.add(best_unmatched_idx)
+            counts["true_positive"] += 1
+        elif best_same_iou >= iou_threshold:
+            # Tất cả box cùng lớp đạt IoU đều đã được ghép; box hiện tại là
+            # duplicate và không được phép làm mất một ground-truth khác.
+            if best_same_idx in matched_ground_truth:
                 counts["false_positive"] += 1
                 counts["duplicate_detection"] += 1
                 errors.append(
@@ -107,6 +119,8 @@ def match_detections(
                         "best_iou": best_same_iou,
                     }
                 )
+            else:  # pragma: no cover - bảo vệ bất biến trong trường hợp bất thường
+                counts["false_positive"] += 1
         else:
             counts["false_positive"] += 1
             if best_any_iou >= iou_threshold and best_any_class != class_id:
@@ -200,6 +214,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", choices=("val", "test"), default="val")
     parser.add_argument("--confidence", type=float, default=0.20)
     parser.add_argument("--iou", type=float, default=0.5)
+    parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--output", type=Path, default=Path("reports/error_analysis"))
     parser.add_argument("--confirm-final-test", action="store_true")
     return parser.parse_args()
@@ -212,6 +227,7 @@ def run_error_analysis(
     split: str = "val",
     confidence: float = 0.20,
     iou: float = 0.5,
+    image_size: int = 640,
     output_dir: Path | str = Path("runs/error_analysis"),
 ) -> dict[str, Any]:
     """Phân tích lỗi mô hình theo lát cắt kích thước tổn thương và taxonomy chuẩn."""
@@ -228,6 +244,8 @@ def run_error_analysis(
     dataset_dir = Path(dataset_dir)
 
     manifest_path = dataset_dir / "manifest.csv"
+    if image_size <= 0:
+        raise ValueError("image_size phải lớn hơn 0")
     if not weights_path.exists():
         raise FileNotFoundError(f"Không tìm thấy trọng số: {weights_path}")
     if not manifest_path.exists():
@@ -250,7 +268,11 @@ def run_error_analysis(
         label_path = dataset_dir / split / "labels" / f"{image_path.stem}.txt"
         truth = read_yolo_labels(label_path, int(record.width), int(record.height))
         result = model.predict(
-            source=str(image_path), conf=confidence, iou=0.7, verbose=False
+            source=str(image_path),
+            imgsz=image_size,
+            conf=confidence,
+            iou=0.7,
+            verbose=False,
         )[0]
         predictions: list[LabeledBox] = [
             (
@@ -397,6 +419,7 @@ def main() -> None:
         split=args.split,
         confidence=args.confidence,
         iou=args.iou,
+        image_size=args.imgsz,
         output_dir=args.output,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))

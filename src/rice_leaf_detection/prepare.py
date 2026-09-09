@@ -24,9 +24,11 @@ from PIL import Image
 try:
     from tqdm import tqdm
 except ImportError:  # pragma: no cover - fallback cho môi trường tối giản
+
     def tqdm(iterable: Any, **_: Any) -> Any:
         """Fallback không hiển thị progress khi tqdm chưa được cài."""
         return iterable
+
 
 from .annotations import build_class_map, parse_label_file_detailed
 from .constants import (
@@ -249,9 +251,7 @@ def _group_summary(group: list[Record]) -> dict[str, Any]:
         for record in group
     )
     class_counts = Counter(
-        int(annotation["class_id"])
-        for record in group
-        for annotation in record["annotations"]
+        int(annotation["class_id"]) for record in group for annotation in record["annotations"]
     )
     return {
         "images": len(group),
@@ -371,6 +371,7 @@ def write_dataset(
     audit: AuditReport,
     output: Path,
     overwrite: bool = False,
+    seed: int = SEED,
 ) -> pd.DataFrame:
     if output.exists() and not overwrite:
         raise FileExistsError(f"{output} đã tồn tại. Dùng --overwrite nếu muốn tạo lại.")
@@ -422,9 +423,7 @@ def write_dataset(
                 "has_target_class": has_target_class,
                 "has_non_target_class": has_non_target_class,
                 "negative_type": (
-                    annotation_status
-                    if annotation_status != TARGET_POSITIVE
-                    else ""
+                    annotation_status if annotation_status != TARGET_POSITIVE else ""
                 ),
                 # Giữ cột cũ cho các dashboard hiện hữu, nhưng semantics đã
                 # được làm rõ: âm tính nghĩa là không có target bbox đã parse.
@@ -484,7 +483,7 @@ def write_dataset(
         "schema_version": 2,
         "dataset_id": None,
         "classes": {str(index): name for index, name in enumerate(CLASS_NAMES)},
-        "split_seed": SEED,
+        "split_seed": seed,
         "split_ratios": SPLIT_RATIOS,
         "split_hashes": split_hashes,
         "dataset_sources": audit.get("dataset_sources", []),

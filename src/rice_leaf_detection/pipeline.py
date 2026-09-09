@@ -5,12 +5,10 @@ kết nối và tự động hóa toàn bộ vòng đời ML theo chuẩn MLOps:
 1. data: Chuẩn hóa nhãn, lọc trùng SHA-256, gom nhóm pHash (BK-Tree), Group-aware Stratified Split.
 2. train: Huấn luyện mô hình YOLOv8 với siêu tham số quản lý từ file cấu hình YAML.
 3. evaluate: Đánh giá hiệu năng trên Validation set, tính mAP50, mAP50-95 và per-class metrics.
-4. errors: Phân tích phân bố lỗi theo kích thước tổn thương và bảng phân loại Error Taxonomy.
-5. test: Đánh giá mô hình cuối cùng trên tập Test bị khóa (--confirm-final-test).
-6. export: Xuất model + policy + metadata sang artifact versioned và kiểm định parity.
-
-Stage ``compare`` vẫn tồn tại để đọc các run cũ, nhưng không nằm trong canonical
-``run_all`` vì orchestrator không được tự chọn một file ``best.pt`` ngẫu nhiên.
+4. tune_policy: Chọn ngưỡng review/accept chỉ từ Validation.
+5. errors: Phân tích phân bố lỗi theo kích thước tổn thương và Error Taxonomy.
+6. test: Đánh giá mô hình cuối cùng trên Test bị khóa (--confirm-final-test).
+7. export: Đóng gói model, policy và metadata thành artifact triển khai.
 """
 
 from __future__ import annotations
@@ -27,7 +25,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import yaml
 
 from .config import load_config
 from .constants import CLASS_NAMES, DEFAULT_ARCHIVES, SEED
@@ -86,6 +83,8 @@ class PipelineOrchestrator:
         train_run_dir = self.runs_dir / "train" / f"{architecture}_640"
         best_weights = train_run_dir / "weights" / "best.pt"
         experiments_csv = self.runs_dir / "evaluate" / "experiments.csv"
+        metrics_json = self.runs_dir / "evaluate" / "val_metrics.json"
+        policy_report = self.runs_dir / "policy" / "policy_tuning.json"
         error_summary = self.runs_dir / "error_analysis" / "error_summary.json"
         deployed_pt = self.artifacts_dir / "model.pt"
         final_test_report = self.runs_dir / "evaluate" / "final_test_report.json"
@@ -100,7 +99,7 @@ class PipelineOrchestrator:
             ),
             "train": StageDefinition(
                 name="train",
-                description="Train YOLOv8 baseline with fixed seed & metadata tracking",
+                description="Train YOLOv8s canonical with fixed seed & metadata tracking",
                 inputs=[data_yaml, self.config_path],
                 outputs=[best_weights],
                 runner=self._run_train_stage,
@@ -109,27 +108,27 @@ class PipelineOrchestrator:
                 name="evaluate",
                 description="Evaluate on Validation set (mAP50-95, mAP50, Recall, AP per class)",
                 inputs=[best_weights, data_yaml],
-                outputs=[experiments_csv],
+                outputs=[experiments_csv, metrics_json],
                 runner=self._run_evaluate_stage,
             ),
-            "compare": StageDefinition(
-                name="compare",
-                description="Legacy report only; không thuộc canonical pipeline",
-                inputs=[experiments_csv],
-                outputs=[],
-                runner=self._run_compare_stage,
+            "tune_policy": StageDefinition(
+                name="tune_policy",
+                description="Tune review/accept thresholds using Validation only",
+                inputs=[best_weights, data_yaml, manifest_csv],
+                outputs=[policy_report],
+                runner=self._run_policy_stage,
             ),
             "errors": StageDefinition(
                 name="errors",
                 description="Analyze errors by lesion size (S/M/L) and taxonomy (FP/FN/Overlap)",
-                inputs=[best_weights, data_yaml],
+                inputs=[best_weights, data_yaml, policy_report],
                 outputs=[error_summary],
                 runner=self._run_error_stage,
             ),
             "test": StageDefinition(
                 name="test",
                 description="Execute locked final test evaluation protocol (one-time report)",
-                inputs=[best_weights, data_yaml],
+                inputs=[best_weights, data_yaml, policy_report],
                 outputs=[final_test_report],
                 runner=self._run_test_stage,
                 requires_confirmation=True,
@@ -137,7 +136,7 @@ class PipelineOrchestrator:
             "export": StageDefinition(
                 name="export",
                 description="Export weights to ONNX/TorchScript and verify prediction parity",
-                inputs=[best_weights],
+                inputs=[best_weights, policy_report],
                 outputs=[deployed_pt],
                 runner=self._run_export_stage,
             ),
@@ -190,19 +189,20 @@ class PipelineOrchestrator:
         manifest_csv = self.output_dir / "manifest.csv"
         audit_json = self.output_dir / "audit_report.json"
 
-        if data_yaml.exists() and not force:
+        if all(path.exists() for path in (data_yaml, manifest_csv, audit_json)) and not force:
             logger.info("Stage 'data': Artifacts đã tồn tại tại %s, bỏ qua.", self.output_dir)
             return [data_yaml, manifest_csv, audit_json]
 
-        seed_everything(SEED)
+        seed = self.config.project.seed if self.config else SEED
+        seed_everything(seed)
         extract_dir = Path("data/extracted")
         sources = prepare_sources([Path(p) for p in DEFAULT_ARCHIVES], extract_dir)
         records, audit = collect_records(sources, keep_negatives=True)
         records, dedup_audit = deduplicate_and_group(records, phash_distance=2)
         audit.update(dedup_audit)
 
-        assign_splits(records)
-        write_dataset(records, audit, self.output_dir, overwrite=True)
+        assign_splits(records, seed=seed)
+        write_dataset(records, audit, self.output_dir, overwrite=True, seed=seed)
         return [data_yaml, manifest_csv, audit_json]
 
     def _run_train_stage(self, epochs: int | None = None, force: bool = False) -> list[Path]:
@@ -254,9 +254,9 @@ class PipelineOrchestrator:
             mosaic=augmentation.mosaic,
             mixup=augmentation.mixup,
             close_mosaic=augmentation.close_mosaic,
-            seed=SEED,
+            seed=self.config.project.seed,
             deterministic=True,
-            workers=0 if sys.platform == "win32" else 2,
+            workers=(0 if sys.platform == "win32" else self.config.training.workers),
             val=True,
             save=True,
             project=str(self.runs_dir / "train"),
@@ -270,6 +270,8 @@ class PipelineOrchestrator:
             last_weights = train_run_dir / "weights" / "last.pt"
             if last_weights.exists():
                 shutil.copy2(last_weights, best_weights)
+        if not best_weights.exists():
+            raise FileNotFoundError(f"Quá trình huấn luyện chưa tạo {best_weights}")
 
         # Ghi metadata truy vết MLOps
         metadata = {
@@ -277,14 +279,14 @@ class PipelineOrchestrator:
             "data_yaml": str(data_yaml.resolve()),
             "data_manifest_sha256": sha256_file(self.output_dir / "manifest.csv"),
             "best_weights_sha256": sha256_file(best_weights),
-            "seed": SEED,
+            "seed": self.config.project.seed,
             "epochs": train_epochs,
             "architecture": architecture,
             "device": str(device),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         (train_run_dir / "run_metadata.json").write_text(
-            yaml.safe_dump(metadata, sort_keys=False), encoding="utf-8"
+            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         return [best_weights]
 
@@ -302,19 +304,32 @@ class PipelineOrchestrator:
         )
 
     def _run_evaluate_stage(self, force: bool = False) -> list[Path]:
+        output_eval = self.runs_dir / "evaluate"
+        experiments_csv = output_eval / "experiments.csv"
+        metrics_json = output_eval / "val_metrics.json"
+        if experiments_csv.exists() and metrics_json.exists() and not force:
+            logger.info("Stage 'evaluate': báo cáo Validation đã tồn tại, bỏ qua.")
+            return [experiments_csv, metrics_json]
+
+        import torch
         from ultralytics import YOLO
 
         best_weights = self._find_best_weights()
         data_yaml = self.output_dir / "data.yaml"
-        output_eval = self.runs_dir / "evaluate"
         output_eval.mkdir(parents=True, exist_ok=True)
 
         model = YOLO(str(best_weights))
         metrics = model.val(
             data=str(data_yaml),
             split="val",
-            imgsz=640,
-            batch=4,
+            imgsz=self.config.data.image_size if self.config else 640,
+            batch=(
+                self.config.training.batch_gpu
+                if self.config and torch.cuda.is_available()
+                else self.config.training.batch_cpu
+                if self.config
+                else 4
+            ),
             conf=0.001,
             iou=0.7,
             plots=True,
@@ -335,7 +350,6 @@ class PipelineOrchestrator:
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
-        experiments_csv = output_eval / "experiments.csv"
         current_df = pd.DataFrame([summary])
         if experiments_csv.exists():
             history_df = pd.read_csv(experiments_csv)
@@ -344,44 +358,92 @@ class PipelineOrchestrator:
             ]
             current_df = pd.concat([history_df, current_df], ignore_index=True)
         current_df.to_csv(experiments_csv, index=False)
+        metrics_json.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
         logger.info("Hoàn thành đánh giá Validation. mAP50-95: %.4f", summary["mAP50-95"])
-        return [experiments_csv]
+        return [experiments_csv, metrics_json]
 
-    def _run_compare_stage(self) -> list[Path]:
-        experiments_csv = self.runs_dir / "evaluate" / "experiments.csv"
-        if not experiments_csv.exists():
-            raise FileNotFoundError(f"Chưa có {experiments_csv}. Hãy chạy stage 'evaluate' trước.")
+    def _run_policy_stage(self, force: bool = False) -> list[Path]:
+        """Tìm policy tốt nhất trên Validation và lưu báo cáo bất biến của stage."""
+        policy_report = self.runs_dir / "policy" / "policy_tuning.json"
+        if policy_report.exists() and not force:
+            logger.info("Stage 'tune_policy': báo cáo policy đã tồn tại, bỏ qua.")
+            return [policy_report]
 
-        df = pd.read_csv(experiments_csv)
-        val_df = df[df["split"] == "val"].sort_values("mAP50-95", ascending=False)
-        if val_df.empty:
-            raise ValueError("Không có kết quả xác thực (split=val) trong experiments.csv")
+        from ultralytics import YOLO
 
-        print("\n--- BẢNG XẾP HẠNG MÔ HÌNH (VALIDATION-ONLY SELECTION) ---")
-        cols = ["run_name", "precision", "recall", "mAP50", "mAP50-95"]
-        print(val_df[cols].to_string(index=False))
-        champion = val_df.iloc[0]["run_name"]
-        print(f"\n=> CHAMPION MODEL ĐỀ XUẤT: {champion}")
-        print("Lưu ý: Tập Test hoàn toàn không được dùng để xếp hạng nhằm chống rò rỉ dữ liệu.\n")
-        return [experiments_csv]
+        from .policy import choose_policy, collect_policy_rows, write_policy_report
 
-    def _run_error_stage(self) -> list[Path]:
+        best_weights = self._find_best_weights()
+        manifest = pd.read_csv(self.output_dir / "manifest.csv")
+        model = YOLO(str(best_weights))
+        rows = collect_policy_rows(
+            model=model,
+            dataset_dir=self.output_dir,
+            manifest=manifest,
+            split="val",
+            confidence=0.001,
+            iou=0.7,
+            image_size=self.config.data.image_size if self.config else 640,
+        )
+        selected, ranking = choose_policy(
+            rows=rows,
+            preferred_review_threshold=self.config.policy.review_threshold if self.config else 0.20,
+            preferred_accept_threshold=self.config.policy.accept_threshold if self.config else 0.45,
+        )
+        write_policy_report(
+            path=policy_report,
+            selected=selected,
+            ranking=ranking,
+            model_path=best_weights,
+            dataset_manifest_hash=sha256_file(self.output_dir / "manifest.csv"),
+        )
+        logger.info(
+            "Policy Validation: review=%.2f accept=%.2f objective=%.4f",
+            selected.review_threshold,
+            selected.accept_threshold,
+            selected.objective,
+        )
+        return [policy_report]
+
+    def _load_selected_policy(self) -> dict[str, float]:
+        """Đọc policy đã được tune; không âm thầm quay về ngưỡng khác."""
+        policy_path = self.runs_dir / "policy" / "policy_tuning.json"
+        if not policy_path.exists():
+            raise FileNotFoundError(f"Thiếu policy artifact: {policy_path}")
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
+        selected = payload.get("selected_policy")
+        if not isinstance(selected, dict):
+            raise ValueError(f"Policy artifact không có selected_policy: {policy_path}")
+        review = float(selected["review_threshold"])
+        accept = float(selected["accept_threshold"])
+        if not 0 <= review <= accept <= 1:
+            raise ValueError(f"Policy artifact có ngưỡng không hợp lệ: {policy_path}")
+        return {"review_threshold": review, "accept_threshold": accept}
+
+    def _run_error_stage(self, force: bool = False) -> list[Path]:
         from .error_analysis import run_error_analysis
+
+        error_summary = self.runs_dir / "error_analysis" / "error_summary.json"
+        if error_summary.exists() and not force:
+            logger.info("Stage 'errors': báo cáo lỗi đã tồn tại, bỏ qua.")
+            return [error_summary]
 
         best_weights = self._find_best_weights()
         data_yaml = self.output_dir / "data.yaml"
         output_errors = self.runs_dir / "error_analysis"
+        policy = self._load_selected_policy()
 
         summary = run_error_analysis(
             weights_path=best_weights,
             data_yaml_path=data_yaml,
             split="val",
-            confidence=self.config.policy.review_threshold if self.config else 0.20,
+            confidence=policy["review_threshold"],
+            image_size=self.config.data.image_size if self.config else 640,
             output_dir=output_errors,
         )
         logger.info("Hoàn thành phân tích lỗi: %s", summary.get("total_predictions", 0))
-        return [output_errors / "error_summary.json"]
+        return [error_summary]
 
     def _run_test_stage(
         self,
@@ -394,12 +456,14 @@ class PipelineOrchestrator:
                 "khóa model và policy."
             )
 
+        import torch
         from ultralytics import YOLO
 
         best_weights = self._find_best_weights()
         data_yaml = self.output_dir / "data.yaml"
         output_eval = self.runs_dir / "evaluate"
         final_report = output_eval / "final_test_report.json"
+        output_eval.mkdir(parents=True, exist_ok=True)
         if final_report.exists() and not force_reopen:
             raise FileExistsError(
                 f"Final test đã tồn tại tại {final_report}. "
@@ -411,8 +475,14 @@ class PipelineOrchestrator:
         metrics = model.val(
             data=str(data_yaml),
             split="test",
-            imgsz=640,
-            batch=4,
+            imgsz=self.config.data.image_size if self.config else 640,
+            batch=(
+                self.config.training.batch_gpu
+                if self.config and torch.cuda.is_available()
+                else self.config.training.batch_cpu
+                if self.config
+                else 4
+            ),
             conf=0.001,
             iou=0.7,
             plots=True,
@@ -434,12 +504,13 @@ class PipelineOrchestrator:
             "model_hash": sha256_file(best_weights),
             "test_compromised": bool(final_report.exists() and force_reopen),
         }
+        test_summary["policy"] = self._load_selected_policy()
 
         manifest_path = self.output_dir / "manifest.csv"
         data_manifest_path = self.output_dir / "data_manifest.json"
         test_summary["dataset_manifest_sha256"] = sha256_file(manifest_path)
         if data_manifest_path.exists():
-            data_manifest = yaml.safe_load(data_manifest_path.read_text(encoding="utf-8")) or {}
+            data_manifest = json.loads(data_manifest_path.read_text(encoding="utf-8")) or {}
             test_summary["test_split_hash"] = data_manifest.get("split_hashes", {}).get("test")
             test_summary["dataset_id"] = data_manifest.get("dataset_id")
 
@@ -466,15 +537,51 @@ class PipelineOrchestrator:
         print(pd.DataFrame([test_summary]).to_string(index=False))
         return [final_report]
 
-    def _run_export_stage(self) -> list[Path]:
+    def _run_export_stage(self, force: bool = False) -> list[Path]:
         from .export import export_model, verify_prediction_parity
 
         best_weights = self._find_best_weights()
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        selected_policy = self._load_selected_policy()
+        target_pt = self.artifacts_dir / "model.pt"
+        policy_path = self.artifacts_dir / "detection_policy.json"
+        model_metadata_path = self.artifacts_dir / "model_metadata.json"
+        export_metadata_path = self.artifacts_dir / "metadata.json"
+
+        if (
+            not force
+            and target_pt.exists()
+            and policy_path.exists()
+            and model_metadata_path.exists()
+            and export_metadata_path.exists()
+        ):
+            try:
+                export_metadata = json.loads(export_metadata_path.read_text(encoding="utf-8"))
+                model_metadata = json.loads(model_metadata_path.read_text(encoding="utf-8"))
+                policy_metadata = json.loads(policy_path.read_text(encoding="utf-8"))
+                exported_path = Path(export_metadata["exported_file"])
+                current_hash = sha256_file(best_weights)
+                image_size = self.config.data.image_size if self.config else 640
+                policy_matches = (
+                    float(policy_metadata["review_threshold"])
+                    == selected_policy["review_threshold"]
+                    and float(policy_metadata["accept_threshold"])
+                    == selected_policy["accept_threshold"]
+                )
+                if (
+                    exported_path.exists()
+                    and export_metadata.get("source_sha256") == current_hash
+                    and model_metadata.get("weights_sha256") == current_hash
+                    and model_metadata.get("image_size") == image_size
+                    and policy_matches
+                ):
+                    logger.info("Stage 'export': artifact hiện tại đã hợp lệ, bỏ qua.")
+                    return [target_pt, exported_path]
+            except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                logger.warning("Artifact export cũ không hợp lệ; thực hiện export lại.")
 
         # 1. Sao chép trọng số canonical sang model.pt; không dùng tên chung
         # best.pt để tránh runtime nạp nhầm model của run khác.
-        target_pt = self.artifacts_dir / "model.pt"
         if best_weights.resolve() != target_pt.resolve():
             shutil.copy2(best_weights, target_pt)
 
@@ -482,7 +589,7 @@ class PipelineOrchestrator:
         export_meta = export_model(
             weights_path=target_pt,
             target_format="onnx",
-            imgsz=640,
+            imgsz=self.config.data.image_size if self.config else 640,
             output_dir=self.artifacts_dir,
         )
         target_exported = Path(export_meta["exported_file"])
@@ -500,21 +607,22 @@ class PipelineOrchestrator:
                 f"Passed={parity_report['parity_passed']}, "
                 f"Max Conf Diff={parity_report['max_conf_diff']:.4f}"
             )
+            if not parity_report["parity_passed"]:
+                raise ValueError("Prediction parity không đạt quality gate")
 
         if self.config is not None:
-            policy_path = self.artifacts_dir / "detection_policy.json"
             write_json(
                 policy_path,
                 {
                     "model_version": "unreleased",
-                    "review_threshold": self.config.policy.review_threshold,
-                    "accept_threshold": self.config.policy.accept_threshold,
+                    "review_threshold": selected_policy["review_threshold"],
+                    "accept_threshold": selected_policy["accept_threshold"],
                     "candidate_confidence": self.config.inference.candidate_confidence,
                     "iou": self.config.inference.iou,
                 },
             )
             write_json(
-                self.artifacts_dir / "model_metadata.json",
+                model_metadata_path,
                 {
                     "model_version": "unreleased",
                     "architecture": self.config.model.architecture,
@@ -568,6 +676,8 @@ class PipelineOrchestrator:
                 produced = stage.runner(epochs=epochs, force=force)
             elif stage_name == "evaluate":
                 produced = stage.runner(force=force)
+            elif stage_name in {"tune_policy", "errors", "export"}:
+                produced = stage.runner(force=force)
             elif stage_name == "test":
                 produced = stage.runner(
                     confirmed=confirm_final_test,
@@ -604,8 +714,7 @@ class PipelineOrchestrator:
         force_reopen_test: bool = False,
     ) -> list[PipelineStatus]:
         """Chạy toàn bộ quy trình pipeline theo thứ tự chuẩn."""
-        # compare là tool legacy, không nằm trong đường chạy canonical.
-        sequence = ["data", "train", "evaluate", "errors"]
+        sequence = ["data", "train", "evaluate", "tune_policy", "errors"]
         if confirm_final_test:
             sequence.append("test")
         sequence.append("export")
@@ -647,7 +756,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--stage",
-        choices=["data", "train", "evaluate", "compare", "errors", "test", "export", "all"],
+        choices=["data", "train", "evaluate", "tune_policy", "errors", "test", "export", "all"],
         default="all",
         help="Chọn stage cần thực thi (mặc định: 'all')",
     )

@@ -46,7 +46,7 @@ Mô hình là **công cụ hỗ trợ trinh sát thực địa và sàng lọc b
 | Kiến trúc mô hình | YOLOv8s @ 640 (canonical) |
 | Lineage & Checksum | Đã khóa bằng `manifest.csv` SHA-256 và `audit_report.json` SHA-256 |
 | Random Seed | 42 (Cố định trong toàn bộ pipeline) |
-| Ngưỡng suy luận | Candidate/policy lấy từ `configs/default.yaml`, phải tune trên Validation |
+| Ngưỡng suy luận | Candidate lấy từ `configs/default.yaml`; policy được tune trên Validation và đóng gói cùng model |
 | Tầng quyết định (Decision Layer) | `detections` kèm `image_summary` và cờ `requires_human_review` |
 | Định dạng phục vụ | PyTorch (`.pt`), ONNX (`.onnx`), OpenVINO, TorchScript |
 

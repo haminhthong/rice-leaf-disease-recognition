@@ -10,7 +10,7 @@ data/
 ├── raw/                 # Lưu trữ file ZIP dữ liệu gốc (Không commit git)
 ├── extracted/           # Lưu trữ dữ liệu sau giải nén tạm (Không commit git)
 ├── processed/           # Tập dữ liệu YOLO đã xử lý, lọc trùng và chia split (Không commit git)
-└── samples/             # Ảnh mẫu kích thước nhỏ phục vụ thử nghiệm smoke test
+└── sample/              # Ảnh mẫu kích thước nhỏ phục vụ thử nghiệm smoke test
 ```
 
 ---

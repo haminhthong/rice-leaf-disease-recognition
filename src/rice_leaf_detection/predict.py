@@ -8,11 +8,14 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
-from ultralytics import YOLO
-
 from .config import load_config
 from .constants import CLASS_NAMES_VI
-from .inference import DetectionPolicy, RawDetection
+from .inference import (
+    DetectionPolicy,
+    RawDetection,
+    RiceLeafDetector,
+    load_detection_policy,
+)
 from .utils import configure_utf8_console
 
 
@@ -32,11 +35,7 @@ def main() -> None:
     configure_utf8_console()
     args = parse_args()
     config = load_config(args.config)
-    args.conf = (
-        args.conf
-        if args.conf is not None
-        else config.inference.candidate_confidence
-    )
+    args.conf = args.conf if args.conf is not None else config.inference.candidate_confidence
     args.iou = args.iou if args.iou is not None else config.inference.iou
     if not 0 <= args.conf <= 1:
         raise ValueError("--conf phải nằm trong khoảng [0, 1]")
@@ -45,12 +44,22 @@ def main() -> None:
     for path in (args.weights, args.source):
         if not path.exists():
             raise FileNotFoundError(path)
-    model = YOLO(str(args.weights))
-    policy = DetectionPolicy(
+    configured_policy = DetectionPolicy(
         review_threshold=config.policy.review_threshold,
         accept_threshold=config.policy.accept_threshold,
     )
-    results = model.predict(
+    policy = load_detection_policy(
+        args.weights.parent / "detection_policy.json",
+        fallback=configured_policy,
+    )
+    detector = RiceLeafDetector(
+        weights=args.weights,
+        image_size=config.data.image_size,
+        confidence=args.conf,
+        iou=args.iou,
+        policy=policy,
+    )
+    results = detector.model.predict(
         source=str(args.source),
         imgsz=config.data.image_size,
         # Lấy đủ candidate để policy có thể giữ lại vùng review.
@@ -77,7 +86,7 @@ def main() -> None:
         candidates = [
             RawDetection(
                 class_id=int(box.cls[0]),
-                class_name=str(model.names[int(box.cls[0])]),
+                class_name=str(detector.model.names[int(box.cls[0])]),
                 score=float(box.conf[0]),
                 box_xyxy=tuple(float(value) for value in box.xyxy[0].tolist()),
             )
@@ -104,10 +113,10 @@ def main() -> None:
     for class_id, count in sorted(counts.items()):
         class_name = CLASS_NAMES_VI.get(class_id)
         if class_name is None:
-            if isinstance(model.names, dict):
-                class_name = str(model.names.get(class_id, class_id))
-            elif 0 <= class_id < len(model.names):
-                class_name = str(model.names[class_id])
+            if isinstance(detector.model.names, dict):
+                class_name = str(detector.model.names.get(class_id, class_id))
+            elif 0 <= class_id < len(detector.model.names):
+                class_name = str(detector.model.names[class_id])
             else:
                 class_name = str(class_id)
         print(f"- {class_name}: {count}")

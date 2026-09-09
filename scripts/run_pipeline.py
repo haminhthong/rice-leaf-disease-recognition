@@ -7,10 +7,10 @@ Cách sử dụng:
   # 2. Chạy quy trình chuẩn hóa và chia dữ liệu (Data Engineering):
   python scripts/run_pipeline.py --stage data
 
-  # 3. Chạy toàn bộ Pipeline từ dữ liệu thô đến xuất mô hình ONNX:
+  # 3. Chạy toàn bộ Pipeline từ dữ liệu thô đến export artifact:
   python scripts/run_pipeline.py --stage all --epochs 5
 
-  # 4. Đánh giá tập Test bị khóa (One-time test reporting protocol):
+  # 4. Đánh giá tập Test bị khóa sau khi chốt model và policy:
   python scripts/run_pipeline.py --stage test --confirm-final-test
 """
 

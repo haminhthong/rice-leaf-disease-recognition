@@ -29,11 +29,11 @@ def test_detection_dataclass_creation() -> None:
 def test_prediction_dataclass_fields() -> None:
     pred = Prediction(
         detections=[],
-        status="no_detection",
+        status="NO_SUPPORTED_SYMPTOM_DETECTED",
         message="Không phát hiện vùng tổn thương",
         warnings=["Kết quả không khẳng định lá khỏe"],
     )
-    assert pred.status == "no_detection"
+    assert pred.status == "NO_SUPPORTED_SYMPTOM_DETECTED"
     assert len(pred.warnings) == 1
 
 

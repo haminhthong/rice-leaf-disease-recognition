@@ -1,16 +1,26 @@
+import os
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import torch
+import numpy as np
+import pytest
+
+# Ultralytics ghi cấu hình người dùng khi import. Dùng thư mục tạm để test
+# không phụ thuộc quyền ghi vào AppData của máy chạy CI hoặc máy developer.
+os.environ.setdefault("YOLO_CONFIG_DIR", str(Path(tempfile.gettempdir()) / "rice-leaf-yolo"))
+
+pytest.importorskip("torch")
+pytest.importorskip("ultralytics")
 
 from rice_leaf_detection.export import verify_prediction_parity
 
 
 class DummyBoxes:
     def __init__(self, cls, conf, xyxy):
-        self.cls = torch.tensor(cls)
-        self.conf = torch.tensor(conf)
-        self.xyxy = torch.tensor(xyxy)
+        self.cls = np.asarray(cls)
+        self.conf = np.asarray(conf)
+        self.xyxy = np.asarray(xyxy)
 
     def __len__(self):
         return len(self.cls)

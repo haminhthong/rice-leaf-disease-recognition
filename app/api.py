@@ -139,19 +139,11 @@ async def predict(file: Annotated[UploadFile, File()]) -> PredictionResponse:
             review_detections=prediction.image_summary.review_detections,
         )
 
-    # Chuẩn hóa response từ detector mới; mock/integration cũ có thể vẫn dùng
-    # detected/no_detection nên map tại biên API.
-    status_map = {
-        "detected": "DETECTED",
-        "no_detection": "NO_SUPPORTED_SYMPTOM_DETECTED",
-    }
-    status = status_map.get(prediction.status, prediction.status)
-
     quality_warnings = list(image_quality.get("warnings", []))
     warnings = [*quality_warnings, *prediction.warnings]
     return PredictionResponse(
         filename=file.filename,
-        status=status,
+        status=prediction.status,
         message=prediction.message,
         image_quality=image_quality,
         image_summary=image_summary_resp,

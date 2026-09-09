@@ -192,10 +192,8 @@ def load_config(path: Path) -> ExperimentConfig:
             image_size=int(_required(data_raw, "image_size", "data")),
         )
         model = ModelConfig(
-            architecture=_text(
-                model_raw.get("architecture", "yolov8s"), "model.architecture"
-            ),
-            weights=_text(_required(model_raw, "weights", "model"), "model.weights")
+            architecture=_text(model_raw.get("architecture", "yolov8s"), "model.architecture"),
+            weights=_text(_required(model_raw, "weights", "model"), "model.weights"),
         )
         augmentation = AugmentationConfig(
             hsv_h=float(training_raw.get("hsv_h", 0.005)),

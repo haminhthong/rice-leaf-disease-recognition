@@ -18,6 +18,7 @@ env/
 .pytest_temp/
 tmp_test/
 .ruff_cache/
+Ultralytics/
 *.egg-info/
 build/
 dist/

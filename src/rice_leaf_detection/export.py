@@ -69,13 +69,40 @@ def verify_prediction_parity(
             )
             continue
 
+        used_export_indices: set[int] = set()
         for i in range(len(pt_boxes)):
             pt_cls = int(pt_boxes.cls[i])
-            exp_cls = int(exp_boxes.cls[i])
             pt_conf = float(pt_boxes.conf[i])
-            exp_conf = float(exp_boxes.conf[i])
             pt_xyxy = tuple(float(v) for v in pt_boxes.xyxy[i].tolist())
-            exp_xyxy = tuple(float(v) for v in exp_boxes.xyxy[i].tolist())
+
+            matching_indices = [
+                index
+                for index in range(len(exp_boxes))
+                if index not in used_export_indices and int(exp_boxes.cls[index]) == pt_cls
+            ]
+            if not matching_indices:
+                results_summary["parity_passed"] = False
+                results_summary["mismatches"].append(
+                    {
+                        "image": str(img),
+                        "box_index": i,
+                        "reason": "Không tìm thấy box cùng class ở artifact export",
+                        "pt_cls": pt_cls,
+                    }
+                )
+                continue
+
+            exp_index = max(
+                matching_indices,
+                key=lambda index: box_iou(
+                    pt_xyxy,
+                    tuple(float(v) for v in exp_boxes.xyxy[index].tolist()),
+                ),
+            )
+            used_export_indices.add(exp_index)
+            exp_cls = int(exp_boxes.cls[exp_index])
+            exp_conf = float(exp_boxes.conf[exp_index])
+            exp_xyxy = tuple(float(v) for v in exp_boxes.xyxy[exp_index].tolist())
 
             conf_diff = abs(pt_conf - exp_conf)
             results_summary["max_conf_diff"] = max(results_summary["max_conf_diff"], conf_diff)
@@ -140,6 +167,7 @@ def export_model(
         raise ValueError("imgsz phải lớn hơn 0")
 
     import logging
+
     logger = logging.getLogger("rice_leaf_export")
 
     model = YOLO(str(weights_path))
@@ -182,6 +210,8 @@ def export_model(
                 sample_images=sample_imgs,
                 imgsz=imgsz,
             )
+            if not parity_info["parity_passed"]:
+                raise ValueError("Prediction parity không đạt quality gate")
 
     metadata = {
         "source_weights": str(weights_path.resolve()),

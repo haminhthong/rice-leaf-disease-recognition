@@ -10,7 +10,6 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
-
 OUTPUT = Path("docs/HUONG_DAN_CAI_THIEN_CHI_TIET.docx")
 BLUE = "2E74B5"
 DARK_BLUE = "1F4D78"
@@ -199,11 +198,20 @@ def cover(doc):
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_after = Pt(26)
-    font(p.add_run("Lộ trình từ Portfolio Pipeline đến AI/ML có bằng chứng và sẵn sàng mở rộng"), 14, MUTED)
+    font(
+        p.add_run("Lộ trình từ Portfolio Pipeline đến AI/ML có bằng chứng và sẵn sàng mở rộng"),
+        14,
+        MUTED,
+    )
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_after = Pt(70)
-    font(p.add_run("Problem  →  AI/ML Correctness  →  Software Engineering  →  Production Value"), 11, BLUE, True)
+    font(
+        p.add_run("Problem  →  AI/ML Correctness  →  Software Engineering  →  Production Value"),
+        11,
+        BLUE,
+        True,
+    )
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     font(p.add_run(f"Phiên bản hướng dẫn • {date.today().strftime('%d/%m/%Y')}"), 10.5, MUTED)
@@ -220,7 +228,7 @@ def content(doc):
     callout(
         doc,
         "Kết luận hiện tại",
-        "Repository đã có pipeline phần mềm tốt và 35/35 kiểm thử đạt, nhưng dữ liệu demo tổng hợp "
+        "Repository đã có pipeline phần mềm tốt và bộ kiểm thử tự động, nhưng dữ liệu demo tổng hợp "
         "không phải bằng chứng thực tế và chưa có checkpoint/metric huấn luyện hoàn chỉnh. Không nên "
         "tuyên bố độ chính xác thực tế.",
     )
@@ -228,10 +236,26 @@ def content(doc):
         doc,
         ["Tầng", "Trạng thái", "Mục tiêu cải thiện"],
         [
-            ["Problem", "Đạt một phần", "Làm rõ phạm vi hai bệnh và ý nghĩa no_detection."],
-            ["AI/ML correctness", "Chưa đủ bằng chứng", "Dữ liệu thật, split đủ lớn, baseline và final test."],
-            ["Software Engineering", "Khá", "Tăng integration test, logging, schema và clean-clone gate."],
-            ["Production/Business", "Chưa sẵn sàng", "Concurrency control, load test, security và field validation."],
+            [
+                "Problem",
+                "Đạt một phần",
+                "Làm rõ phạm vi hai bệnh và ý nghĩa NO_SUPPORTED_SYMPTOM_DETECTED.",
+            ],
+            [
+                "AI/ML correctness",
+                "Chưa đủ bằng chứng",
+                "Dữ liệu thật, split đủ lớn, validation policy và final test.",
+            ],
+            [
+                "Software Engineering",
+                "Khá",
+                "Tăng integration test, logging, schema và clean-clone gate.",
+            ],
+            [
+                "Production/Business",
+                "Chưa sẵn sàng",
+                "Concurrency control, load test, security và field validation.",
+            ],
         ],
         [2100, 2100, 5160],
     )
@@ -253,8 +277,8 @@ def content(doc):
         doc,
         ["Trạng thái", "Ý nghĩa", "HTTP/API behavior"],
         [
-            ["detected", "Có ít nhất một vùng đạt confidence", "200, trả danh sách detection."],
-            ["no_detection", "Không có vùng thuộc hai lớp vượt ngưỡng", "200, cảnh báo không đồng nghĩa lá khỏe."],
+            ["DETECTED", "Có ít nhất một vùng đạt accept threshold", "200, trả danh sách detection."],
+            ["NO_SUPPORTED_SYMPTOM_DETECTED", "Không có vùng thuộc hai lớp vượt policy", "200, cảnh báo không đồng nghĩa lá khỏe."],
             ["invalid_image", "Không giải mã được hoặc ảnh quá lớn", "400/413."],
             ["unsupported_input", "MIME/định dạng không hỗ trợ", "415."],
             ["model_unavailable", "Weights/config/model chưa sẵn sàng", "503."],
@@ -305,19 +329,19 @@ def content(doc):
     bullet(doc, "Ảnh trùng SHA nhưng annotation xung đột phải được quarantine, không tự chọn nhãn có nhiều box hơn.")
 
     doc.add_heading("4. Tầng AI/ML — Thí nghiệm và metric", level=1)
-    doc.add_heading("4.1 Baseline và candidate", level=2)
-    bullet(doc, "Đổi yolov8s_champion.yaml thành yolov8s_candidate.yaml cho đến khi có kết quả.")
-    bullet(doc, "Baseline chính: YOLOv8n; candidate: YOLOv8s trên cùng split, seed, image size và epoch budget.")
-    bullet(doc, "Không tuning bằng test. Chỉ dùng validation để chọn model và confidence threshold.")
+    doc.add_heading("4.1 Mô hình canonical và policy", level=2)
+    bullet(doc, "Chỉ dùng YOLOv8s @ 640 trong đường chạy canonical; không còn stage so sánh model tự động.")
+    bullet(doc, "Đánh giá mAP trên Validation, sau đó tune review/accept threshold bằng Validation-only policy stage.")
+    bullet(doc, "Không tuning bằng Test; Test chỉ chạy sau khi chốt model và policy.")
     bullet(doc, "Test chỉ chạy sau khi khóa config và model artifact.")
 
     doc.add_heading("4.2 Quy trình thực nghiệm", level=2)
     for text in (
         "Audit dữ liệu và khóa manifest checksum.",
-        "Huấn luyện YOLOv8n baseline.",
+        "Huấn luyện YOLOv8s canonical.",
         "Đánh giá validation, lưu metric và error cases.",
-        "Huấn luyện YOLOv8s candidate trên cùng protocol.",
-        "Chọn bằng mAP50-95 kết hợp recall từng lớp và latency.",
+        "Tune review/accept policy trên Validation.",
+        "Chốt model, policy, config và commit.",
         "Khóa model/config/commit; đánh giá test đúng một lần.",
         "Cập nhật Model Card và bảng kết quả có nguồn artifact.",
     ):
@@ -386,7 +410,7 @@ def content(doc):
         [
             ["Data", "Dataset ít group; thiếu lớp; group/SHA cross-split; image-label mismatch."],
             ["Dedup", "Exact duplicate; near duplicate; false merge; annotation conflict quarantine."],
-            ["API", "File >10 MB; MIME giả; ảnh hỏng; model 503; no_detection; success mock."],
+            ["API", "File >10 MB; MIME giả; ảnh hỏng; model 503; no symptom; success mock."],
             ["Inference", "Box rỗng; class lạ; model result mock; imgsz/config đồng bộ."],
             ["Integration", "Checkpoint nhỏ; CLI predict; Docker health/readiness."],
         ],
@@ -396,7 +420,7 @@ def content(doc):
     doc.add_heading("5.5 CI và clean clone", level=2)
     bullet(doc, "CI phải chạy ruff format --check src app scripts tests.")
     bullet(doc, "CI phải chạy ruff check, pytest, pip check và import smoke test.")
-    bullet(doc, "Thêm Docker build + health smoke test ở job riêng.")
+    bullet(doc, "Docker build và health smoke test là bước triển khai riêng khi có artifact model.")
     bullet(doc, "Clean clone phải cài được bằng pip install -e \".[app,dev]\" trong Python 3.11 mới.")
     bullet(doc, "Không commit egg-info, pytest temp, cache, data processed, runs, artifacts hoặc weights.")
 
@@ -434,21 +458,21 @@ def content(doc):
     bullet(doc, "Manifest công khai chỉ dùng đường dẫn tương đối/ID, không chứa path máy cá nhân.")
 
     doc.add_heading("6.4 Chứng minh business value", level=2)
-    bullet(doc, "Demo bằng ảnh thật ngoài training, có cả success, no_detection và ảnh khó.")
+    bullet(doc, "Demo bằng ảnh thật ngoài training, có cả success, không phát hiện triệu chứng và ảnh khó.")
     bullet(doc, "Nhờ chuyên gia nông nghiệp review false positive/false negative.")
     bullet(doc, "Đo thời gian xử lý thủ công so với hệ thống và chi phí inference.")
     bullet(doc, "Xác định quyết định mà hệ thống hỗ trợ; tránh chỉ trình bày bounding box đẹp.")
 
     doc.add_heading("7. README, Model Card và CV", level=1)
     bullet(doc, "README ưu tiên bài toán, data, kiến trúc, cài đặt, chạy, kết quả, hạn chế và reproducibility.")
-    bullet(doc, "Chuyển câu hỏi phỏng vấn sang docs/INTERVIEW_NOTES.md để README gọn hơn.")
+    bullet(doc, "README là tài liệu kỹ thuật canonical; Model Card và Data Card chỉ giữ nội dung chuyên biệt.")
     bullet(doc, "Gọi ảnh tổng hợp là synthetic smoke-test asset, không phải bằng chứng accuracy.")
     bullet(doc, "Model Card phải có metric từng lớp, dataset version, intended use và failure modes.")
     bullet(doc, "Chỉ ghi số mAP/latency trong CV khi có artifact chứng minh.")
     add_table(
         doc,
         ["Model", "Val mAP50-95", "Test mAP50-95", "Recall BLB", "Recall Brown Spot", "p95 latency"],
-        [["YOLOv8n baseline", "TBD", "TBD", "TBD", "TBD", "TBD"], ["YOLOv8s candidate", "TBD", "TBD", "TBD", "TBD", "TBD"]],
+        [["YOLOv8s canonical", "TBD", "TBD", "TBD", "TBD", "TBD"]],
         [1800, 1450, 1450, 1450, 1760, 1450],
     )
 
@@ -457,9 +481,9 @@ def content(doc):
         doc,
         ["Phase", "Công việc", "Điều kiện hoàn thành"],
         [
-            ["1. Truthfulness", "Sửa claim BK-tree/leakage; rename champion; làm rõ no_detection; CI lint scripts.", "Không còn claim chưa có bằng chứng; test/lint xanh."],
+            ["1. Truthfulness", "Sửa claim BK-tree/leakage; làm rõ trạng thái không phát hiện; CI lint scripts.", "Không còn claim chưa có bằng chứng; test/lint xanh."],
             ["2. Data correctness", "Provenance/license; split gates; conflict quarantine; pHash calibration; manifest hash.", "Val/test đủ lớp; 0 group/SHA leakage."],
-            ["3. Real experiments", "Train baseline/candidate; val selection; final test; error analysis.", "Metric tái lập và truy được về artifact."],
+            ["3. Real experiments", "Train canonical; validation policy; final test; error analysis.", "Metric tái lập và truy được về artifact."],
             ["4. Reliability", "Schema, config đồng bộ, logging, edge/integration tests, readiness.", "Clean clone và Docker smoke test đạt."],
             ["5. Production evidence", "Concurrency, rate limit, security, load test, monitoring.", "Có report tải và không tuyên bố quá khả năng."],
         ],
@@ -472,13 +496,13 @@ def content(doc):
         "Dataset có nguồn, license và checksum.",
         "Không phát hiện exact/group leakage giữa split.",
         "Validation/test đủ group và instance mỗi lớp.",
-        "Có YOLOv8n baseline thật và candidate thật.",
+        "Có YOLOv8s canonical, validation policy và final test artifact.",
         "Có validation metric, final test metric và error analysis.",
         "Metric truy được về config, manifest, commit và checkpoint.",
         "Training/inference dùng cùng image size và preprocessing.",
         "Ảnh demo thực không xuất hiện trong training.",
         "API xử lý input sai, model thiếu và overload.",
-        "35 test hiện tại vẫn đạt và test mới bao phủ thêm các trường hợp biên/tích hợp.",
+        "Unit test hiện tại vẫn đạt và test mới bao phủ thêm các trường hợp biên/tích hợp.",
         "Clean clone, CI và Docker smoke test đạt.",
         "Không có secret, path cá nhân hoặc artifact tạm trong Git.",
         "README và Model Card không có claim quá mức.",
@@ -492,12 +516,12 @@ def content(doc):
         doc,
         "P0",
         "Sửa tính trung thực của tài liệu: BK-tree không bảo đảm O(log N), pHash chỉ giảm nguy cơ leakage, "
-        "candidate chưa phải champion, no_detection không phải lá khỏe.",
+        "policy candidate chưa phải chẩn đoán, NO_SUPPORTED_SYMPTOM_DETECTED không phải lá khỏe.",
     )
     callout(
         doc,
         "P1",
-        "Chuẩn bị dataset thật có license; thêm split quality gates; huấn luyện YOLOv8n baseline và YOLOv8s candidate.",
+        "Chuẩn bị dataset thật có license; thêm split quality gates; huấn luyện và đánh giá YOLOv8s canonical.",
     )
     callout(
         doc,

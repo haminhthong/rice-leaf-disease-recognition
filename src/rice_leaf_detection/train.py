@@ -10,7 +10,6 @@ import json
 import time
 from pathlib import Path
 
-import torch
 from ultralytics import YOLO
 
 from .config import load_config
@@ -41,6 +40,7 @@ def main() -> None:
     configure_utf8_console()
     args = parse_args()
     config = load_config(args.config)
+    import torch
 
     # Ưu tiên các tham số truyền trực tiếp từ CLI, nếu không dùng từ file cấu hình YAML
     args.data = args.data or config.data.yaml

@@ -18,6 +18,25 @@ def test_ghep_prediction_tao_tp_fp_fn() -> None:
     assert len(errors) == 2
 
 
+def test_match_khong_de_duplicate_lam_mat_ground_truth_khac() -> None:
+    truth = [
+        (0, (0.0, 0.0, 10.0, 10.0), 1.0),
+        (0, (20.0, 20.0, 30.0, 30.0), 1.0),
+    ]
+    predictions = [
+        (0, (0.0, 0.0, 10.0, 10.0), 0.9),
+        (0, (0.0, 0.0, 10.0, 10.0), 0.8),
+        (0, (20.0, 20.0, 30.0, 30.0), 0.7),
+    ]
+
+    errors, counts = match_detections(truth, predictions)
+
+    assert counts["true_positive"] == 2
+    assert counts["duplicate_detection"] == 1
+    assert counts["false_negative"] == 0
+    assert len(errors) == 1
+
+
 def test_chuan_hoa_boolean_tu_csv() -> None:
     assert parse_boolean("True") is True
     assert parse_boolean("False") is False

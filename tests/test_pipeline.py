@@ -7,11 +7,19 @@ from rice_leaf_detection.pipeline import PipelineOrchestrator, PipelineStatus
 
 
 def test_pipeline_stages_definition() -> None:
-    """Kiểm tra PipelineOrchestrator khai báo đủ 7 stage chuẩn MLOps."""
+    """Kiểm tra PipelineOrchestrator khai báo đủ stage canonical."""
     orchestrator = PipelineOrchestrator()
     stages = orchestrator.get_stages()
 
-    expected_stages = {"data", "train", "evaluate", "compare", "errors", "test", "export"}
+    expected_stages = {
+        "data",
+        "train",
+        "evaluate",
+        "tune_policy",
+        "errors",
+        "test",
+        "export",
+    }
     assert set(stages.keys()) == expected_stages
 
     # Stage test phải yêu cầu confirmation
@@ -90,7 +98,6 @@ def test_pipeline_run_all_success() -> None:
         ),
     ) as mock_exec:
         results = orchestrator.run_all(confirm_final_test=True)
-        # compare là tool legacy, không còn nằm trong canonical run_all.
-        assert len(results) == 6
+        assert len(results) == 7
         assert all(r.status == "SUCCESS" for r in results)
-        assert mock_exec.call_count == 6
+        assert mock_exec.call_count == 7

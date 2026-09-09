@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from app.settings import get_settings
 from rice_leaf_detection.inference import DetectionPolicy, RiceLeafDetector
 
 logger = logging.getLogger(__name__)
@@ -51,11 +52,15 @@ st.caption(
 
 
 st.sidebar.header("⚙️ Cấu Hình Mô Hình")
-weights_path_env = os.getenv("RICE_MODEL_PATH", "artifacts/model.pt")
+runtime_settings = get_settings()
+weights_path_env = os.getenv("RICE_MODEL_PATH", runtime_settings.weights.as_posix())
 weights = Path(st.sidebar.text_input("Trọng số mô hình (.pt):", weights_path_env))
 
 candidate_confidence = min(
-    max(float(os.getenv("RICE_CANDIDATE_CONFIDENCE", "0.20")), 0.05),
+    max(
+        float(os.getenv("RICE_CANDIDATE_CONFIDENCE", str(runtime_settings.candidate_confidence))),
+        0.05,
+    ),
     0.95,
 )
 confidence = st.sidebar.slider(
@@ -69,12 +74,12 @@ iou = st.sidebar.slider(
     "Ngưỡng NMS IoU (IoU Threshold):",
     0.10,
     0.90,
-    float(os.getenv("RICE_IOU", "0.45")),
+    float(os.getenv("RICE_IOU", str(runtime_settings.iou))),
     0.05,
 )
-image_size = int(os.getenv("RICE_IMAGE_SIZE", "640"))
-review_threshold = float(os.getenv("RICE_REVIEW_THRESHOLD", "0.20"))
-accept_threshold = float(os.getenv("RICE_ACCEPT_THRESHOLD", "0.45"))
+image_size = int(os.getenv("RICE_IMAGE_SIZE", str(runtime_settings.image_size)))
+review_threshold = float(os.getenv("RICE_REVIEW_THRESHOLD", str(runtime_settings.review_threshold)))
+accept_threshold = float(os.getenv("RICE_ACCEPT_THRESHOLD", str(runtime_settings.accept_threshold)))
 
 st.sidebar.markdown("---")
 st.sidebar.info(
@@ -139,10 +144,7 @@ with tab_infer:
                             iou=iou,
                         )
 
-                        if prediction.status in {
-                            "NO_SUPPORTED_SYMPTOM_DETECTED",
-                            "no_detection",
-                        }:
+                        if prediction.status == "NO_SUPPORTED_SYMPTOM_DETECTED":
                             st.warning(f"⚠️ {prediction.message}")
                             for w in prediction.warnings:
                                 st.caption(f"• {w}")

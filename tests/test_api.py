@@ -59,7 +59,7 @@ def test_predict_thanh_cong_voi_model_mock(mock_get_detector: MagicMock) -> None
                 box_xyxy=(10.0, 20.0, 100.0, 200.0),
             )
         ],
-        status="detected",
+        status="DETECTED",
         message="Phát hiện 1 vùng bệnh",
         warnings=[],
     )
@@ -87,7 +87,7 @@ def test_predict_no_detection_voi_model_mock(mock_get_detector: MagicMock) -> No
     mock_detector = MagicMock()
     mock_prediction = Prediction(
         detections=[],
-        status="no_detection",
+        status="NO_SUPPORTED_SYMPTOM_DETECTED",
         message="Không phát hiện vùng bệnh",
         warnings=["Kết quả không khẳng định lá khỏe"],
     )

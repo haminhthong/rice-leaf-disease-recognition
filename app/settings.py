@@ -1,5 +1,6 @@
 """Quản lý cấu hình khi vận hành dịch vụ API."""
 
+import json
 import os
 from dataclasses import dataclass
 from functools import cache
@@ -53,15 +54,26 @@ def get_settings() -> ApiSettings:
     """Tạo cấu hình từ biến môi trường và kiểm tra các ràng buộc."""
     release_dir = os.getenv("RICE_MODEL_RELEASE_DIR")
     default_weights = str(Path(release_dir) / "model.pt") if release_dir else "artifacts/model.pt"
+    weights = Path(os.getenv("RICE_MODEL_PATH", default_weights))
+    artifact_review = 0.20
+    artifact_accept = 0.45
+    policy_path = weights.parent / "detection_policy.json"
+    if policy_path.exists():
+        try:
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            artifact_review = float(policy["review_threshold"])
+            artifact_accept = float(policy["accept_threshold"])
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Artifact policy không hợp lệ: {policy_path}") from exc
     settings = ApiSettings(
-        weights=Path(os.getenv("RICE_MODEL_PATH", default_weights)),
+        weights=weights,
         image_size=int(os.getenv("RICE_IMAGE_SIZE", "640")),
         candidate_confidence=float(
             os.getenv("RICE_CANDIDATE_CONFIDENCE", os.getenv("RICE_CONFIDENCE", "0.20"))
         ),
         iou=float(os.getenv("RICE_IOU", "0.45")),
-        review_threshold=float(os.getenv("RICE_REVIEW_THRESHOLD", "0.20")),
-        accept_threshold=float(os.getenv("RICE_ACCEPT_THRESHOLD", "0.45")),
+        review_threshold=float(os.getenv("RICE_REVIEW_THRESHOLD", str(artifact_review))),
+        accept_threshold=float(os.getenv("RICE_ACCEPT_THRESHOLD", str(artifact_accept))),
         max_upload_bytes=10 * 1024 * 1024,
         max_image_pixels=25_000_000,
         inference_concurrency=int(os.getenv("INFERENCE_CONCURRENCY", "2")),
