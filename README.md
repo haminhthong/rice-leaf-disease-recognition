@@ -116,6 +116,7 @@ rice-leaf-disease-recognition/
 │   ├── BAO_CAO_CAI_TIEN_DU_AN.docx
 │   └── HUONG_DAN_CAI_THIEN_CHI_TIET.docx
 ├── scripts/
+│   ├── build_detailed_guide.py  # sinh tài liệu hướng dẫn DOCX
 │   ├── create_demo_assets.py      # tạo ZIP/ảnh demo synthetic
 │   └── run_pipeline.py            # entry point không cần cài console script
 ├── src/rice_leaf_detection/

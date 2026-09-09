@@ -217,6 +217,7 @@ class PipelineOrchestrator:
             return [best_weights]
 
         import torch
+
         from ultralytics import YOLO
 
         data_yaml = self.output_dir / "data.yaml"
@@ -312,6 +313,7 @@ class PipelineOrchestrator:
             return [experiments_csv, metrics_json]
 
         import torch
+
         from ultralytics import YOLO
 
         best_weights = self._find_best_weights()
@@ -457,6 +459,7 @@ class PipelineOrchestrator:
             )
 
         import torch
+
         from ultralytics import YOLO
 
         best_weights = self._find_best_weights()

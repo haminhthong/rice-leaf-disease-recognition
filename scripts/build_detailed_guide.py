@@ -1,3 +1,5 @@
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 from datetime import date
@@ -270,15 +272,25 @@ def content(doc):
     bullet(doc, "Không gọi kết quả là chẩn đoán bệnh nếu chưa có kiểm chứng lâm sàng/nông học.")
     bullet(doc, "Không khẳng định lá khỏe khi mô hình không phát hiện bounding box.")
     bullet(doc, "Không mở rộng kết luận sang bệnh khác, ảnh drone hoặc ảnh toàn ruộng.")
-    bullet(doc, "Ghi rõ điều kiện ảnh mục tiêu: lá đủ rõ, tổn thương nhìn thấy, độ phân giải phù hợp.")
+    bullet(
+        doc, "Ghi rõ điều kiện ảnh mục tiêu: lá đủ rõ, tổn thương nhìn thấy, độ phân giải phù hợp."
+    )
 
     doc.add_heading("2.2 Chuẩn hóa trạng thái đầu ra", level=2)
     add_table(
         doc,
         ["Trạng thái", "Ý nghĩa", "HTTP/API behavior"],
         [
-            ["DETECTED", "Có ít nhất một vùng đạt accept threshold", "200, trả danh sách detection."],
-            ["NO_SUPPORTED_SYMPTOM_DETECTED", "Không có vùng thuộc hai lớp vượt policy", "200, cảnh báo không đồng nghĩa lá khỏe."],
+            [
+                "DETECTED",
+                "Có ít nhất một vùng đạt accept threshold",
+                "200, trả danh sách detection.",
+            ],
+            [
+                "NO_SUPPORTED_SYMPTOM_DETECTED",
+                "Không có vùng thuộc hai lớp vượt policy",
+                "200, cảnh báo không đồng nghĩa lá khỏe.",
+            ],
             ["invalid_image", "Không giải mã được hoặc ảnh quá lớn", "400/413."],
             ["unsupported_input", "MIME/định dạng không hỗ trợ", "415."],
             ["model_unavailable", "Weights/config/model chưa sẵn sàng", "503."],
@@ -289,15 +301,24 @@ def content(doc):
     bullet(doc, "mAP50-95 và mAP50 trên validation/test.")
     bullet(doc, "Precision, recall và AP theo từng lớp; đặc biệt theo dõi false negative.")
     bullet(doc, "Latency p50/p95, kích thước model, RAM/VRAM và throughput.")
-    bullet(doc, "Đánh giá trên ảnh thực địa ngoài nguồn training và review bởi người có chuyên môn.")
+    bullet(
+        doc, "Đánh giá trên ảnh thực địa ngoài nguồn training và review bởi người có chuyên môn."
+    )
 
     doc.add_heading("3. Tầng AI/ML — Dữ liệu và chống leakage", level=1)
     doc.add_heading("3.1 Data provenance", level=2)
     number(doc, "Ghi URL, tác giả, phiên bản, ngày tải và giấy phép của từng dataset.")
     number(doc, "Giữ ZIP nguồn bất biến; lưu SHA-256 của archive và manifest.")
     number(doc, "Không commit dữ liệu nếu license không cho phép; chỉ chia sẻ sample hợp pháp.")
-    number(doc, "Data Card phải ghi số ảnh, box, nguồn, class distribution, điều kiện chụp và giới hạn.")
-    callout(doc, "Gate", "Không huấn luyện chính thức nếu chưa xác định được nguồn và quyền sử dụng dữ liệu.")
+    number(
+        doc,
+        "Data Card phải ghi số ảnh, box, nguồn, class distribution, điều kiện chụp và giới hạn.",
+    )
+    callout(
+        doc,
+        "Gate",
+        "Không huấn luyện chính thức nếu chưa xác định được nguồn và quyền sử dụng dữ liệu.",
+    )
 
     doc.add_heading("3.2 Split đủ lớn", level=2)
     doc.add_paragraph(
@@ -308,7 +329,11 @@ def content(doc):
         doc,
         ["Kiểm tra bắt buộc", "Ngưỡng gợi ý ban đầu", "Hành động khi không đạt"],
         [
-            ["Group độc lập mỗi split", "Train ≥ 10; Val ≥ 5; Test ≥ 5", "Dừng pipeline và yêu cầu thêm dữ liệu."],
+            [
+                "Group độc lập mỗi split",
+                "Train ≥ 10; Val ≥ 5; Test ≥ 5",
+                "Dừng pipeline và yêu cầu thêm dữ liệu.",
+            ],
             ["Instance mỗi lớp ở val", "≥ 20", "Không cho phép model selection."],
             ["Instance mỗi lớp ở test", "≥ 20", "Không công bố metric test."],
             ["group_id qua nhiều split", "0", "Lỗi nghiêm trọng; tạo lại split."],
@@ -323,15 +348,30 @@ def content(doc):
 
     doc.add_heading("3.3 pHash/BK-tree và annotation conflict", level=2)
     bullet(doc, "Sửa tuyên bố 'triệt tiêu leakage' thành 'giảm nguy cơ leakage'.")
-    bullet(doc, "Không khẳng định BK-tree luôn O(log N); hiệu năng phụ thuộc dữ liệu và trường hợp xấu.")
-    bullet(doc, "Hiệu chỉnh phash_distance bằng tập ảnh resize, JPEG, crop, đổi sáng và ảnh khác nhau nhưng giống nền.")
+    bullet(
+        doc,
+        "Không khẳng định BK-tree luôn O(log N); hiệu năng phụ thuộc dữ liệu và trường hợp xấu.",
+    )
+    bullet(
+        doc,
+        "Hiệu chỉnh phash_distance bằng tập ảnh resize, JPEG, crop, đổi sáng và ảnh khác nhau nhưng giống nền.",
+    )
     bullet(doc, "Đo precision/recall của near-duplicate matching ở ngưỡng 0, 2, 4, 6, 8.")
-    bullet(doc, "Ảnh trùng SHA nhưng annotation xung đột phải được quarantine, không tự chọn nhãn có nhiều box hơn.")
+    bullet(
+        doc,
+        "Ảnh trùng SHA nhưng annotation xung đột phải được quarantine, không tự chọn nhãn có nhiều box hơn.",
+    )
 
     doc.add_heading("4. Tầng AI/ML — Thí nghiệm và metric", level=1)
     doc.add_heading("4.1 Mô hình canonical và policy", level=2)
-    bullet(doc, "Chỉ dùng YOLOv8s @ 640 trong đường chạy canonical; không còn stage so sánh model tự động.")
-    bullet(doc, "Đánh giá mAP trên Validation, sau đó tune review/accept threshold bằng Validation-only policy stage.")
+    bullet(
+        doc,
+        "Chỉ dùng YOLOv8s @ 640 trong đường chạy canonical; không còn stage so sánh model tự động.",
+    )
+    bullet(
+        doc,
+        "Đánh giá mAP trên Validation, sau đó tune review/accept threshold bằng Validation-only policy stage.",
+    )
     bullet(doc, "Không tuning bằng Test; Test chỉ chạy sau khi chốt model và policy.")
     bullet(doc, "Test chỉ chạy sau khi khóa config và model artifact.")
 
@@ -363,10 +403,14 @@ def content(doc):
 
     doc.add_heading("4.4 Metric và phân tích lỗi", level=2)
     bullet(doc, "Primary metric: mAP50-95; secondary: mAP50, precision, recall, AP theo lớp.")
-    bullet(doc, "Bổ sung F1 theo confidence, PR curve, confusion matrix và false negatives theo lớp.")
+    bullet(
+        doc, "Bổ sung F1 theo confidence, PR curve, confusion matrix và false negatives theo lớp."
+    )
     bullet(doc, "Báo cáo metric theo nguồn dataset để phát hiện model học đặc trưng nguồn.")
     bullet(doc, "Không chọn model chỉ vì mAP trung bình cao nếu recall một bệnh quá thấp.")
-    bullet(doc, "Không đưa số liệu vào CV nếu không truy ngược được về metrics.json, config và commit.")
+    bullet(
+        doc, "Không đưa số liệu vào CV nếu không truy ngược được về metrics.json, config và commit."
+    )
 
     doc.add_heading("4.5 Đồng bộ training và inference", level=2)
     doc.add_paragraph(
@@ -389,11 +433,18 @@ def content(doc):
         ],
         [2600, 6760],
     )
-    callout(doc, "Nguyên tắc", "Không thêm repository/service pattern nếu không có database hoặc business layer thật.")
+    callout(
+        doc,
+        "Nguyên tắc",
+        "Không thêm repository/service pattern nếu không có database hoặc business layer thật.",
+    )
 
     doc.add_heading("5.2 API schema và lỗi", level=2)
     bullet(doc, "Dùng Pydantic response model thay dict tự do.")
-    bullet(doc, "Validate confidence/IoU và model path khi startup; env sai không được gây lỗi 500 khó hiểu.")
+    bullet(
+        doc,
+        "Validate confidence/IoU và model path khi startup; env sai không được gây lỗi 500 khó hiểu.",
+    )
     bullet(doc, "Tách liveness và readiness; readiness phải kiểm tra model có nạp được.")
     bullet(doc, "Không trả traceback hoặc đường dẫn máy chủ cho client.")
 
@@ -409,7 +460,10 @@ def content(doc):
         ["Nhóm", "Test bắt buộc"],
         [
             ["Data", "Dataset ít group; thiếu lớp; group/SHA cross-split; image-label mismatch."],
-            ["Dedup", "Exact duplicate; near duplicate; false merge; annotation conflict quarantine."],
+            [
+                "Dedup",
+                "Exact duplicate; near duplicate; false merge; annotation conflict quarantine.",
+            ],
             ["API", "File >10 MB; MIME giả; ảnh hỏng; model 503; no symptom; success mock."],
             ["Inference", "Box rỗng; class lạ; model result mock; imgsz/config đồng bộ."],
             ["Integration", "Checkpoint nhỏ; CLI predict; Docker health/readiness."],
@@ -421,8 +475,11 @@ def content(doc):
     bullet(doc, "CI phải chạy ruff format --check src app scripts tests.")
     bullet(doc, "CI phải chạy ruff check, pytest, pip check và import smoke test.")
     bullet(doc, "Docker build và health smoke test là bước triển khai riêng khi có artifact model.")
-    bullet(doc, "Clean clone phải cài được bằng pip install -e \".[app,dev]\" trong Python 3.11 mới.")
-    bullet(doc, "Không commit egg-info, pytest temp, cache, data processed, runs, artifacts hoặc weights.")
+    bullet(doc, 'Clean clone phải cài được bằng pip install -e ".[app,dev]" trong Python 3.11 mới.')
+    bullet(
+        doc,
+        "Không commit egg-info, pytest temp, cache, data processed, runs, artifacts hoặc weights.",
+    )
 
     doc.add_heading("6. Tầng Production và Business Value", level=1)
     doc.add_heading("6.1 Concurrency", level=2)
@@ -437,7 +494,10 @@ def content(doc):
         [
             ["Demo cá nhân", "Một FastAPI process, model cache, threadpool, concurrency=1."],
             ["Nhóm nhỏ", "Nhiều API worker nhưng inference queue dùng chung; benchmark CPU/GPU."],
-            ["100 users", "API gateway, rate limit, queue, inference worker/replica và monitoring."],
+            [
+                "100 users",
+                "API gateway, rate limit, queue, inference worker/replica và monitoring.",
+            ],
             ["Quy mô lớn", "Model serving chuyên dụng, autoscaling và artifact registry."],
         ],
         [2300, 7060],
@@ -454,24 +514,44 @@ def content(doc):
     bullet(doc, "Giới hạn tổng pixel để chống decompression bomb.")
     bullet(doc, "Bổ sung rate limiting, timeout, CORS allowlist và authentication nếu API public.")
     bullet(doc, "Chạy dependency audit; đánh giá vulnerability thay vì tự động ignore.")
-    bullet(doc, "Không lưu ảnh mặc định; nếu lưu phải có consent, retention và xóa EXIF khi phù hợp.")
+    bullet(
+        doc, "Không lưu ảnh mặc định; nếu lưu phải có consent, retention và xóa EXIF khi phù hợp."
+    )
     bullet(doc, "Manifest công khai chỉ dùng đường dẫn tương đối/ID, không chứa path máy cá nhân.")
 
     doc.add_heading("6.4 Chứng minh business value", level=2)
-    bullet(doc, "Demo bằng ảnh thật ngoài training, có cả success, không phát hiện triệu chứng và ảnh khó.")
+    bullet(
+        doc,
+        "Demo bằng ảnh thật ngoài training, có cả success, không phát hiện triệu chứng và ảnh khó.",
+    )
     bullet(doc, "Nhờ chuyên gia nông nghiệp review false positive/false negative.")
     bullet(doc, "Đo thời gian xử lý thủ công so với hệ thống và chi phí inference.")
     bullet(doc, "Xác định quyết định mà hệ thống hỗ trợ; tránh chỉ trình bày bounding box đẹp.")
 
     doc.add_heading("7. README, Model Card và CV", level=1)
-    bullet(doc, "README ưu tiên bài toán, data, kiến trúc, cài đặt, chạy, kết quả, hạn chế và reproducibility.")
-    bullet(doc, "README là tài liệu kỹ thuật canonical; Model Card và Data Card chỉ giữ nội dung chuyên biệt.")
+    bullet(
+        doc,
+        "README ưu tiên bài toán, data, kiến trúc, cài đặt, chạy, kết quả, hạn chế và reproducibility.",
+    )
+    bullet(
+        doc,
+        "README là tài liệu kỹ thuật canonical; Model Card và Data Card chỉ giữ nội dung chuyên biệt.",
+    )
     bullet(doc, "Gọi ảnh tổng hợp là synthetic smoke-test asset, không phải bằng chứng accuracy.")
-    bullet(doc, "Model Card phải có metric từng lớp, dataset version, intended use và failure modes.")
+    bullet(
+        doc, "Model Card phải có metric từng lớp, dataset version, intended use và failure modes."
+    )
     bullet(doc, "Chỉ ghi số mAP/latency trong CV khi có artifact chứng minh.")
     add_table(
         doc,
-        ["Model", "Val mAP50-95", "Test mAP50-95", "Recall BLB", "Recall Brown Spot", "p95 latency"],
+        [
+            "Model",
+            "Val mAP50-95",
+            "Test mAP50-95",
+            "Recall BLB",
+            "Recall Brown Spot",
+            "p95 latency",
+        ],
         [["YOLOv8s canonical", "TBD", "TBD", "TBD", "TBD", "TBD"]],
         [1800, 1450, 1450, 1450, 1760, 1450],
     )
@@ -481,11 +561,31 @@ def content(doc):
         doc,
         ["Phase", "Công việc", "Điều kiện hoàn thành"],
         [
-            ["1. Truthfulness", "Sửa claim BK-tree/leakage; làm rõ trạng thái không phát hiện; CI lint scripts.", "Không còn claim chưa có bằng chứng; test/lint xanh."],
-            ["2. Data correctness", "Provenance/license; split gates; conflict quarantine; pHash calibration; manifest hash.", "Val/test đủ lớp; 0 group/SHA leakage."],
-            ["3. Real experiments", "Train canonical; validation policy; final test; error analysis.", "Metric tái lập và truy được về artifact."],
-            ["4. Reliability", "Schema, config đồng bộ, logging, edge/integration tests, readiness.", "Clean clone và Docker smoke test đạt."],
-            ["5. Production evidence", "Concurrency, rate limit, security, load test, monitoring.", "Có report tải và không tuyên bố quá khả năng."],
+            [
+                "1. Truthfulness",
+                "Sửa claim BK-tree/leakage; làm rõ trạng thái không phát hiện; CI lint scripts.",
+                "Không còn claim chưa có bằng chứng; test/lint xanh.",
+            ],
+            [
+                "2. Data correctness",
+                "Provenance/license; split gates; conflict quarantine; pHash calibration; manifest hash.",
+                "Val/test đủ lớp; 0 group/SHA leakage.",
+            ],
+            [
+                "3. Real experiments",
+                "Train canonical; validation policy; final test; error analysis.",
+                "Metric tái lập và truy được về artifact.",
+            ],
+            [
+                "4. Reliability",
+                "Schema, config đồng bộ, logging, edge/integration tests, readiness.",
+                "Clean clone và Docker smoke test đạt.",
+            ],
+            [
+                "5. Production evidence",
+                "Concurrency, rate limit, security, load test, monitoring.",
+                "Có report tải và không tuyên bố quá khả năng.",
+            ],
         ],
         [1500, 4460, 3400],
     )

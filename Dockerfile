@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    RICE_MODEL_PATH=/app/artifacts/best.pt
+    RICE_MODEL_PATH=/app/artifacts/model.pt
 
 WORKDIR /app
 

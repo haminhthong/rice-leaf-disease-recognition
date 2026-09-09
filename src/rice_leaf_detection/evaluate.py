@@ -166,6 +166,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Hàm thực thi chính của pipeline đánh giá."""
     import torch
+
     from ultralytics import YOLO
 
     configure_utf8_console()
