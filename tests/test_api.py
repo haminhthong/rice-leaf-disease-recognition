@@ -5,30 +5,13 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.api import app
-from app.settings import get_settings
 from rice_leaf_detection.inference import Detection, Prediction
 
 
-def test_health_live() -> None:
-    response = TestClient(app).get("/health/live")
+def test_health() -> None:
+    response = TestClient(app).get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "live"}
-
-
-@patch("app.api.get_detector", side_effect=FileNotFoundError("weights.pt"))
-def test_health_ready_khi_thieu_weights(_mock_get_detector: MagicMock) -> None:
-    response = TestClient(app).get("/health/ready")
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Dịch vụ mô hình chưa sẵn sàng suy luận"
-
-
-def test_info_dung_cau_hinh_runtime_mac_dinh() -> None:
-    response = TestClient(app).get("/info")
-    assert response.status_code == 200
-    payload = response.json()
-    settings = get_settings()
-    assert payload["model_weights"] == settings.weights.as_posix()
-    assert payload["max_upload_mb"] == 10
+    assert response.json() == {"status": "ok"}
 
 
 def test_tu_choi_dinh_dang_file_khong_ho_tro() -> None:
@@ -60,13 +43,12 @@ def test_predict_thanh_cong_voi_model_mock(mock_get_detector: MagicMock) -> None
             )
         ],
         status="DETECTED",
-        message="Phát hiện 1 vùng bệnh",
+        message="Phát hiện 1 vùng tổn thương",
         warnings=[],
     )
     mock_detector.predict.return_value = (mock_prediction, MagicMock())
     mock_get_detector.return_value = mock_detector
 
-    # Tạo ảnh JPEG hợp lệ để chỉ kiểm tra hợp đồng API, không tải mô hình thật.
     img = Image.new("RGB", (100, 100), color="green")
     buffer = io.BytesIO()
     img.save(buffer, format="JPEG")
@@ -80,6 +62,7 @@ def test_predict_thanh_cong_voi_model_mock(mock_get_detector: MagicMock) -> None
     assert payload["status"] == "DETECTED"
     assert len(payload["detections"]) == 1
     assert payload["detections"][0]["class_name_vi"] == "Bạc lá lúa"
+    assert payload["detections"][0]["confidence"] == 0.92
 
 
 @patch("app.api.get_detector")
@@ -87,7 +70,7 @@ def test_predict_no_detection_voi_model_mock(mock_get_detector: MagicMock) -> No
     mock_detector = MagicMock()
     mock_prediction = Prediction(
         detections=[],
-        status="NO_SUPPORTED_SYMPTOM_DETECTED",
+        status="NO_SYMPTOM_DETECTED",
         message="Không phát hiện vùng bệnh",
         warnings=["Kết quả không khẳng định lá khỏe"],
     )
@@ -104,6 +87,19 @@ def test_predict_no_detection_voi_model_mock(mock_get_detector: MagicMock) -> No
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "NO_SUPPORTED_SYMPTOM_DETECTED"
+    assert payload["status"] == "NO_SYMPTOM_DETECTED"
     assert len(payload["detections"]) == 0
     assert len(payload["warnings"]) > 0
+
+
+@patch("app.api.get_detector", side_effect=FileNotFoundError("weights.pt"))
+def test_predict_khi_thieu_weights(_mock_get_detector: MagicMock) -> None:
+    img = Image.new("RGB", (100, 100), color="green")
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG")
+
+    response = TestClient(app).post(
+        "/predict", files={"file": ("sample.jpg", buffer.getvalue(), "image/jpeg")}
+    )
+    assert response.status_code == 503
+    assert "Dịch vụ mô hình suy luận thất bại" in response.json()["detail"]

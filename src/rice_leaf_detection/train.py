@@ -1,12 +1,8 @@
-"""Pipeline huấn luyện mô hình YOLOv8 phát hiện bệnh lá lúa (Training Pipeline).
-
-Module này nhận các tham số cấu hình từ file YAML (hoặc các cờ dòng lệnh CLI),
-cố định seed tái lập, tự động phát hiện thiết bị phần cứng (GPU/CPU), khởi tạo mô hình YOLOv8
-và lưu vết metadata thí nghiệm sau khi huấn luyện thành công.
-"""
+"""Huấn luyện mô hình YOLOv8 phát hiện tổn thương bệnh lá lúa (Training Pipeline)."""
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -17,42 +13,41 @@ from .utils import configure_utf8_console, seed_everything
 
 
 def parse_args() -> argparse.Namespace:
-    """Phân tích các tham số truyền từ giao diện dòng lệnh (CLI)."""
     parser = argparse.ArgumentParser(description="Huấn luyện YOLOv8 phát hiện bệnh lá lúa")
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--data", type=Path, help="Đường dẫn file data.yaml")
-    parser.add_argument("--model", help="Tên hoặc đường dẫn trọng số mô hình gốc (vd: yolov8s.pt)")
+    parser.add_argument("--model", help="Trọng số khởi tạo (vd: yolov8s.pt)")
     parser.add_argument("--epochs", type=int, help="Số lượng epoch huấn luyện")
-    parser.add_argument("--batch", type=int, help="Kích thước batch (Batch size)")
+    parser.add_argument("--batch", type=int, help="Batch size")
     parser.add_argument("--imgsz", type=int, help="Kích thước ảnh đầu vào (pixels)")
     parser.add_argument("--patience", type=int, help="Early stopping patience (epochs)")
     parser.add_argument("--device", default=None, help="Thiết bị tính toán (0 cho GPU, cpu)")
-
-    parser.add_argument("--workers", type=int, help="Số lượng worker DataLoader")
-    parser.add_argument("--runs-dir", type=Path, help="Thư mục lưu trữ kết quả thí nghiệm")
-    parser.add_argument("--name", default=None, help="Tên đợt huấn luyện (Run name)")
+    parser.add_argument("--workers", type=int, help="Số worker DataLoader")
+    parser.add_argument("--runs-dir", type=Path, help="Thư mục lưu trữ kết quả")
+    parser.add_argument("--name", default=None, help="Tên đợt huấn luyện")
     parser.add_argument("--resume", type=Path, help="Đường dẫn last.pt để tiếp tục huấn luyện")
     return parser.parse_args()
 
 
 def main() -> None:
-    """Hàm thực thi chính của pipeline huấn luyện."""
     configure_utf8_console()
     args = parse_args()
     config = load_config(args.config)
     import torch
 
-    # Ưu tiên các tham số truyền trực tiếp từ CLI, nếu không dùng từ file cấu hình YAML
     args.data = args.data or config.data.yaml
     args.model = args.model or config.model.weights
     args.epochs = args.epochs if args.epochs is not None else config.training.epochs
     args.imgsz = args.imgsz if args.imgsz is not None else config.data.image_size
     args.patience = args.patience if args.patience is not None else config.training.patience
-    args.workers = args.workers if args.workers is not None else config.training.workers
+    args.workers = (
+        args.workers
+        if args.workers is not None
+        else (0 if sys.platform == "win32" else config.training.workers)
+    )
     args.runs_dir = args.runs_dir or config.project.runs_dir
     seed = config.project.seed
 
-    # Kiểm tra ràng buộc giá trị hợp lệ của tham số
     if args.epochs <= 0:
         raise ValueError("--epochs phải lớn hơn 0")
     if args.batch is not None and args.batch <= 0:
@@ -64,10 +59,8 @@ def main() -> None:
     if args.workers < 0:
         raise ValueError("--workers không được âm")
 
-    # Cố định ngẫu nhiên seed để đảm bảo tính tái lập
     seed_everything(seed)
 
-    # Tự động cấu hình GPU CUDA nếu khả dụng, ngược lại dùng CPU
     device = (
         args.device if args.device is not None else ("0" if torch.cuda.is_available() else "cpu")
     )
@@ -82,14 +75,12 @@ def main() -> None:
         model.train(resume=True)
     else:
         if not args.data.exists():
-            raise FileNotFoundError(
-                f"Không tìm thấy {args.data}. Hãy chạy lệnh rice-prepare trước."
-            )
+            raise FileNotFoundError(f"Không tìm thấy {args.data}. Hãy chạy prepare_data.py trước.")
         run_name = args.name or (
             f"{config.model.architecture}_640_{time.strftime('%Y%m%d_%H%M%S')}"
         )
         model = YOLO(args.model)
-        augmentation = config.training.augmentation
+        aug = config.training.augmentation
         model.train(
             data=str(args.data),
             epochs=args.epochs,
@@ -103,22 +94,20 @@ def main() -> None:
             seed=seed,
             deterministic=True,
             workers=args.workers,
-            # Truyền policy augmentation từ YAML vào Ultralytics một cách tường
-            # minh; validation/test không nhận các tham số augmentation này.
-            hsv_h=augmentation.hsv_h,
-            hsv_s=augmentation.hsv_s,
-            hsv_v=augmentation.hsv_v,
-            degrees=augmentation.degrees,
-            translate=augmentation.translate,
-            scale=augmentation.scale,
-            fliplr=augmentation.fliplr,
-            flipud=augmentation.flipud,
-            mosaic=augmentation.mosaic,
-            mixup=augmentation.mixup,
-            close_mosaic=augmentation.close_mosaic,
+            # Augmentation chỉ áp dụng cho tập train; val/test tất định
+            hsv_h=aug.hsv_h,
+            hsv_s=aug.hsv_s,
+            hsv_v=aug.hsv_v,
+            degrees=aug.degrees,
+            translate=aug.translate,
+            scale=aug.scale,
+            fliplr=aug.fliplr,
+            flipud=aug.flipud,
+            mosaic=aug.mosaic,
+            mixup=aug.mixup,
+            close_mosaic=aug.close_mosaic,
             val=True,
             save=True,
-            save_period=10,
             plots=True,
             project=str(args.runs_dir),
             name=run_name,
@@ -130,55 +119,20 @@ def main() -> None:
     if not best_weights.exists():
         raise FileNotFoundError(f"Quá trình huấn luyện chưa tạo {best_weights}")
 
-    if not args.resume:
-        import subprocess
-        import sys
+    metadata = {
+        "run_name": run_dir.name,
+        "data_yaml": str(args.data.resolve()),
+        "epochs": args.epochs,
+        "batch_size": batch,
+        "image_size": args.imgsz,
+        "model": args.model,
+        "device": str(device),
+        "best_weights": str(best_weights.resolve()),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    (run_dir / "run_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
-        import ultralytics
-
-        from .utils import sha256_file
-
-        manifest_path = args.data.parent / "manifest.csv"
-        manifest_hash = sha256_file(manifest_path) if manifest_path.exists() else None
-        audit_path = args.data.parent / "audit_report.json"
-        audit_hash = sha256_file(audit_path) if audit_path.exists() else None
-
-        git_sha = None
-        try:
-            git_sha = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True
-            ).strip()
-        except Exception:
-            pass
-
-        best_weights_hash = sha256_file(best_weights)
-
-        metadata = {
-            "run_name": run_dir.name,
-            "data_yaml": str(args.data.resolve()),
-            "dataset_manifest_sha256": manifest_hash,
-            "data_audit_sha256": audit_hash,
-            "git_commit_sha": git_sha,
-            "best_weights_sha256": best_weights_hash,
-            "seed": seed,
-            "config": str(args.config.resolve()),
-            "epochs_requested": args.epochs,
-            "batch_size": batch,
-            "image_size": args.imgsz,
-            "model": args.model,
-            "architecture": config.model.architecture,
-            "device": str(device),
-            "python_version": sys.version,
-            "ultralytics_version": ultralytics.__version__,
-            "augmentation": {
-                field: getattr(config.training.augmentation, field)
-                for field in config.training.augmentation.__dataclass_fields__
-            },
-            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        }
-        metadata_path = run_dir / "run_metadata.json"
-        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-
+    print("\nHuấn luyện hoàn tất!")
     print(f"Thư mục kết quả: {run_dir.resolve()}")
     print(f"Trọng số tốt nhất: {best_weights.resolve()}")
 

@@ -1,13 +1,24 @@
 import pytest
 
-from rice_leaf_detection.deduplication import BKTree, deduplicate_and_group
+from rice_leaf_detection.deduplication import (
+    DisjointSet,
+    deduplicate_and_group,
+    hamming_distance,
+)
 
 
-def test_bk_tree_tim_hash_gan_nhau() -> None:
-    tree = BKTree()
-    tree.add(0b0000, 0)
-    tree.add(0b1111, 1)
-    assert tree.query(0b0001, 1) == [0]
+def test_hamming_distance_tinh_chinh_xac() -> None:
+    assert hamming_distance("0000000000000000", "0000000000000001") == 1
+    assert hamming_distance(0b0000, 0b0001) == 1
+    assert hamming_distance("ffffffffffffffff", "0000000000000000") == 64
+
+
+def test_disjoint_set_union_find() -> None:
+    ds = DisjointSet(5)
+    ds.union(0, 1)
+    ds.union(1, 2)
+    assert ds.find(0) == ds.find(2)
+    assert ds.find(3) != ds.find(0)
 
 
 def test_tu_choi_khoang_cach_am() -> None:
@@ -33,10 +44,10 @@ def test_exact_duplicate_removed() -> None:
             "annotations": [{"class_id": 0, "x": 0.5, "y": 0.5, "w": 0.2, "h": 0.2}],
         },
     ]
-    unique, audit = deduplicate_and_group(records, phash_distance=2)
+    unique, report = deduplicate_and_group(records, phash_distance=2)
     assert len(unique) == 1
-    assert audit["exact_duplicates_removed"] == 1
-    assert len(audit["annotation_conflicts"]) == 0
+    assert report["exact_duplicates_removed"] == 1
+    assert len(report["annotation_conflicts"]) == 0
 
 
 def test_cach_ly_annotation_conflict_cung_sha256_khac_nhan() -> None:
@@ -56,10 +67,9 @@ def test_cach_ly_annotation_conflict_cung_sha256_khac_nhan() -> None:
             "annotations": [{"class_id": 1, "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.3}],
         },
     ]
-    unique, audit = deduplicate_and_group(records, phash_distance=2)
-    # Không bản ghi xung đột nào được phép đi vào dữ liệu huấn luyện.
+    unique, report = deduplicate_and_group(records, phash_distance=2)
     assert len(unique) == 0
-    assert len(audit["annotation_conflicts"]) == 1
+    assert len(report["annotation_conflicts"]) == 1
 
 
 def test_near_duplicate_group_not_split() -> None:
@@ -80,10 +90,9 @@ def test_near_duplicate_group_not_split() -> None:
             "annotations": [],
         },
     ]
-    unique, audit = deduplicate_and_group(records, phash_distance=2)
+    unique, report = deduplicate_and_group(records, phash_distance=2)
     assert len(unique) == 2
-    assert audit["near_duplicate_links"] == 1
-    # Hai biến thể phải nhận cùng mã nhóm trước khi chia dữ liệu.
+    assert report["near_duplicate_links"] == 1
     assert unique[0]["group_id"] == unique[1]["group_id"]
 
 
@@ -99,7 +108,7 @@ def test_same_original_key_not_cross_split() -> None:
         },
         {
             "sha256": "hash_x2",
-            "phash": "ffffffffffffffff",  # pHash xa nhau nhưng cùng original_key
+            "phash": "ffffffffffffffff",
             "image_path": "sourceA__leaf_01_rot.jpg",
             "original_key": "sourceA:leaf_01",
             "annotations": [],

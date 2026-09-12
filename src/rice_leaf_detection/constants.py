@@ -1,6 +1,6 @@
 """Hằng số hệ thống cho dự án Nhận Diện Bệnh Lá Lúa (Rice Leaf Disease Recognition).
 
-Module này định nghĩa các hằng số dùng chung trong toàn bộ pipeline:
+Module này định nghĩa các hằng số dùng chung:
 danh sách tên lớp mục tiêu, tỷ lệ chia tập dữ liệu train/val/test,
 seed cố định và các định dạng file ảnh được hỗ trợ.
 """
@@ -20,30 +20,26 @@ CLASS_NAMES_VI: dict[int, str] = {
     1: "Đốm nâu",
 }
 
-# Trạng thái annotation được ghi trong manifest. Ảnh chỉ được đưa vào dataset
-# huấn luyện khi trạng thái đã được xác minh rõ ràng.
-AnnotationStatus = Literal[
-    "TARGET_POSITIVE",
-    "TRUE_NEGATIVE",
-    "OUT_OF_SCOPE_NEGATIVE",
-    "INVALID_OR_MISSING",
-]
+# Trạng thái annotation chuẩn hóa:
+# - valid: Ảnh có nhãn hợp lệ chứa ít nhất 1 lesion thuộc 2 bệnh mục tiêu.
+# - negative: Ảnh negative hợp lệ (không chứa tổn thương mục tiêu).
+# - invalid: Ảnh thiếu file nhãn hoặc tọa độ nhãn lỗi -> loại bỏ (không được coi là negative).
+AnnotationStatus = Literal["valid", "negative", "invalid"]
 
-TARGET_POSITIVE = "TARGET_POSITIVE"
-TRUE_NEGATIVE = "TRUE_NEGATIVE"
-OUT_OF_SCOPE_NEGATIVE = "OUT_OF_SCOPE_NEGATIVE"
-INVALID_OR_MISSING = "INVALID_OR_MISSING"
+STATUS_VALID: AnnotationStatus = "valid"
+STATUS_NEGATIVE: AnnotationStatus = "negative"
+STATUS_INVALID: AnnotationStatus = "invalid"
 
-# Các phần mở rộng ảnh được pipeline dữ liệu chấp nhận.
+# Các phần mở rộng ảnh được chấp nhận.
 IMAGE_EXTENSIONS: set[str] = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
-# Tên ba tập dữ liệu của thí nghiệm.
+# Tên ba tập dữ liệu.
 SPLITS: tuple[str, str, str] = ("train", "val", "test")
 
-# Tỷ lệ mục tiêu; số lượng thực tế còn phụ thuộc vào các nhóm ảnh độc lập.
+# Tỷ lệ mục tiêu chia tập.
 SPLIT_RATIOS: dict[str, float] = {"train": 0.70, "val": 0.15, "test": 0.15}
 
-# Hai tệp dữ liệu nguồn được dùng khi không truyền --archives.
+# Hai tệp dữ liệu nguồn mặc định.
 DEFAULT_ARCHIVES: tuple[Path, Path] = (
     Path("RiceLeafAnnotatedDataset.zip"),
     Path("dataset1.zip"),

@@ -31,13 +31,11 @@ dev = [
 ]
 
 [project.scripts]
-rice-pipeline = "rice_leaf_detection.pipeline:main"
 rice-prepare = "rice_leaf_detection.prepare:main"
 rice-train = "rice_leaf_detection.train:main"
 rice-evaluate = "rice_leaf_detection.evaluate:main"
 rice-predict = "rice_leaf_detection.predict:main"
 rice-analyze-errors = "rice_leaf_detection.error_analysis:main"
-rice-export = "rice_leaf_detection.export:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -52,4 +50,4 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-p no:cacheprovider"
+addopts = "-p no:cacheprovider --basetemp=.pytest_tmp"

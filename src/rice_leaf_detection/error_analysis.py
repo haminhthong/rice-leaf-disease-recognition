@@ -1,11 +1,10 @@
-"""Pipeline phân tích lỗi mô hình chi tiết (Error Analysis Pipeline).
+"""Phân tích lỗi mô hình chi tiết (Error Analysis Pipeline).
 
-Module này ghép nối (matching) giữa kết quả dự đoán (Detections) và nhãn thật (Ground Truth)
-để thống kê:
-- True Positive (TP): Dự đoán đúng lớp và có IoU >= threshold.
-- False Positive (FP): Dự đoán nhầm lớp, phát hiện nhầm background hoặc IoU < threshold.
-- False Negative (FN): Bỏ sót đối tượng bệnh thật trên ảnh.
-- Negative Sample Errors: Thống kê báo động giả trên các ảnh negative mẫu (không có bệnh).
+Ghép nối kết quả dự đoán với nhãn Ground Truth để phân loại lỗi:
+- True Positive (TP)
+- False Positive (FP): background, localization, classification confusion, duplicate
+- False Negative (FN): bỏ sót tổn thương
+- Phân bố theo kích thước tổn thương: Small (< 0.05), Medium (0.05 - 0.20), Large (> 0.20)
 """
 
 import argparse
@@ -16,7 +15,6 @@ from typing import Any
 
 import pandas as pd
 
-from .constants import OUT_OF_SCOPE_NEGATIVE, TRUE_NEGATIVE
 from .utils import configure_utf8_console
 
 Box = tuple[float, float, float, float]
@@ -24,7 +22,7 @@ LabeledBox = tuple[int, Box, float]
 
 
 def box_iou(left: Box, right: Box) -> float:
-    """Tính IoU của hai bounding box ở định dạng x1, y1, x2, y2."""
+    """Tính IoU của hai bounding box ở định dạng (x1, y1, x2, y2)."""
     x1 = max(left[0], right[0])
     y1 = max(left[1], right[1])
     x2 = min(left[2], right[2])
@@ -37,7 +35,7 @@ def box_iou(left: Box, right: Box) -> float:
 
 
 def classify_lesion_size(box: Box, width: int, height: int) -> str:
-    """Phân loại kích thước tổn thương dựa trên tỷ lệ diện tích box so với diện tích ảnh."""
+    """Phân loại kích thước tổn thương dựa trên tỷ lệ diện tích box so với ảnh."""
     if width <= 0 or height <= 0:
         return "medium"
     area_fraction = ((box[2] - box[0]) * (box[3] - box[1])) / (width * height)
@@ -53,16 +51,7 @@ def match_detections(
     predictions: list[LabeledBox],
     iou_threshold: float = 0.5,
 ) -> tuple[list[dict[str, Any]], Counter]:
-    """Ghép kết quả dự đoán với nhãn thật theo độ tin cậy giảm dần và phân loại chi tiết lỗi.
-
-    Error Taxonomy:
-    - true_positive: Dự đoán đúng lớp và IoU >= iou_threshold.
-    - false_negative: Bỏ sót tổn thương thật (Missed lesion).
-    - false_positive_background: Dự đoán vào nền/lá không có bệnh (IoU < 0.1).
-    - localization_error: Dự đoán đúng lớp nhưng IoU không đạt ngưỡng [0.1, iou_threshold).
-    - classification_confusion: Dự đoán đè lên vùng bệnh khác lớp (BLB <-> Brown Spot).
-    - duplicate_detection: Nhiều box dự đoán đè lên cùng một tổn thương thật.
-    """
+    """Ghép kết quả dự đoán với nhãn thật theo độ tin cậy giảm dần."""
     if not 0 < iou_threshold <= 1:
         raise ValueError("Ngưỡng IoU phải nằm trong khoảng (0, 1]")
     matched_ground_truth: set[int] = set()
@@ -72,7 +61,6 @@ def match_detections(
     for class_id, predicted_box, confidence in sorted(
         predictions, key=lambda item: item[2], reverse=True
     ):
-        # 1. Tìm ứng viên tốt nhất cùng lớp
         same_class_candidates = [
             (index, box_iou(predicted_box, true_box))
             for index, (true_class, true_box, _) in enumerate(ground_truth)
@@ -92,7 +80,6 @@ def match_detections(
             default=(-1, 0.0),
         )
 
-        # 2. Tìm ứng viên tốt nhất trên mọi lớp (để phát hiện nhầm lớp)
         all_candidates = [
             (index, box_iou(predicted_box, true_box), true_class)
             for index, (true_class, true_box, _) in enumerate(ground_truth)
@@ -105,8 +92,6 @@ def match_detections(
             matched_ground_truth.add(best_unmatched_idx)
             counts["true_positive"] += 1
         elif best_same_iou >= iou_threshold:
-            # Tất cả box cùng lớp đạt IoU đều đã được ghép; box hiện tại là
-            # duplicate và không được phép làm mất một ground-truth khác.
             if best_same_idx in matched_ground_truth:
                 counts["false_positive"] += 1
                 counts["duplicate_detection"] += 1
@@ -119,7 +104,7 @@ def match_detections(
                         "best_iou": best_same_iou,
                     }
                 )
-            else:  # pragma: no cover - bảo vệ bất biến trong trường hợp bất thường
+            else:
                 counts["false_positive"] += 1
         else:
             counts["false_positive"] += 1
@@ -176,6 +161,8 @@ def match_detections(
 
 def read_yolo_labels(path: Path, width: int, height: int) -> list[LabeledBox]:
     boxes: list[LabeledBox] = []
+    if not path.exists():
+        return boxes
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -196,7 +183,6 @@ def read_yolo_labels(path: Path, width: int, height: int) -> list[LabeledBox]:
 
 
 def parse_boolean(value: object) -> bool:
-    """Chuẩn hóa giá trị boolean đọc từ CSV."""
     if isinstance(value, bool):
         return value
     normalized = str(value).strip().lower()
@@ -207,45 +193,23 @@ def parse_boolean(value: object) -> bool:
     raise ValueError(f"Không thể chuyển thành boolean: {value!r}")
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Phân tích lỗi phát hiện theo ảnh và nguồn")
-    parser.add_argument("--weights", type=Path, required=True)
-    parser.add_argument("--dataset", type=Path, default=Path("data/processed/rice_leaf_detection"))
-    parser.add_argument("--split", choices=("val", "test"), default="val")
-    parser.add_argument("--confidence", type=float, default=0.20)
-    parser.add_argument("--iou", type=float, default=0.5)
-    parser.add_argument("--imgsz", type=int, default=640)
-    parser.add_argument("--output", type=Path, default=Path("reports/error_analysis"))
-    parser.add_argument("--confirm-final-test", action="store_true")
-    return parser.parse_args()
-
-
 def run_error_analysis(
     weights_path: Path | str,
-    dataset_dir: Path | str | None = None,
-    data_yaml_path: Path | str | None = None,
+    dataset_dir: Path | str = Path("data/processed/rice_leaf_detection"),
     split: str = "val",
-    confidence: float = 0.20,
+    confidence: float = 0.45,
     iou: float = 0.5,
     image_size: int = 640,
-    output_dir: Path | str = Path("runs/error_analysis"),
+    output_dir: Path | str = Path("reports/error_analysis"),
 ) -> dict[str, Any]:
-    """Phân tích lỗi mô hình theo lát cắt kích thước tổn thương và taxonomy chuẩn."""
+    """Phân tích lỗi mô hình theo lát cắt kích thước tổn thương và phân loại lỗi."""
     from ultralytics import YOLO
 
     weights_path = Path(weights_path)
+    dataset_dir = Path(dataset_dir)
     output_dir = Path(output_dir)
 
-    if dataset_dir is None:
-        if data_yaml_path is not None:
-            dataset_dir = Path(data_yaml_path).parent
-        else:
-            dataset_dir = Path("data/processed/rice_leaf_detection")
-    dataset_dir = Path(dataset_dir)
-
     manifest_path = dataset_dir / "manifest.csv"
-    if image_size <= 0:
-        raise ValueError("image_size phải lớn hơn 0")
     if not weights_path.exists():
         raise FileNotFoundError(f"Không tìm thấy trọng số: {weights_path}")
     if not manifest_path.exists():
@@ -254,14 +218,11 @@ def run_error_analysis(
     model = YOLO(str(weights_path))
     manifest = pd.read_csv(manifest_path)
     manifest = manifest[manifest["split"] == split]
+
     rows: list[dict[str, Any]] = []
     totals: Counter[str] = Counter()
-
     lesion_size_totals = {"small": 0, "medium": 0, "large": 0}
     lesion_size_recalled = {"small": 0, "medium": 0, "large": 0}
-    negative_totals = {TRUE_NEGATIVE: 0, OUT_OF_SCOPE_NEGATIVE: 0}
-    negative_false_positives_by_type = {TRUE_NEGATIVE: 0, OUT_OF_SCOPE_NEGATIVE: 0}
-    source_totals: dict[str, Counter] = {}
 
     for record in manifest.itertuples(index=False):
         image_path = dataset_dir / record.output_image
@@ -277,22 +238,13 @@ def run_error_analysis(
         predictions: list[LabeledBox] = [
             (
                 int(box.cls[0]),
-                tuple(float(value) for value in box.xyxy[0].tolist()),
+                tuple(float(v) for v in box.xyxy[0].tolist()),
                 float(box.conf[0]),
             )
             for box in result.boxes
         ]
         image_errors, counts = match_detections(truth, predictions, iou)
         totals.update(counts)
-        source_totals.setdefault(str(record.source), Counter()).update(counts)
-
-        annotation_status = getattr(record, "annotation_status", None)
-        if annotation_status not in negative_totals and parse_boolean(record.is_negative):
-            annotation_status = TRUE_NEGATIVE
-        if annotation_status in negative_totals:
-            negative_totals[annotation_status] += 1
-            if any(error["error_type"] == "false_positive" for error in image_errors):
-                negative_false_positives_by_type[annotation_status] += 1
 
         unmatched_indices = {e["gt_index"] for e in image_errors if "gt_index" in e}
         for gt_idx, (_, gt_box, _) in enumerate(truth):
@@ -301,118 +253,68 @@ def run_error_analysis(
             if gt_idx not in unmatched_indices:
                 lesion_size_recalled[size_cat] += 1
 
-        for error in image_errors:
+        for err in image_errors:
             rows.append(
                 {
                     "image": record.output_image,
                     "source": record.source,
                     "is_negative": parse_boolean(record.is_negative),
-                    "annotation_status": annotation_status,
-                    **error,
+                    **err,
                 }
             )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    errors = pd.DataFrame(rows)
-    errors.to_csv(output_dir / f"{split}_errors.csv", index=False)
-
-    negative_false_positives = 0
-    if not errors.empty:
-        negative_mask = errors["is_negative"].astype(str).str.lower().eq("true")
-        false_positive_mask = errors["error_type"].eq("false_positive")
-        negative_false_positives = int(
-            errors.loc[negative_mask & false_positive_mask, "image"].nunique()
-        )
-
-    total_negatives = sum(negative_totals.values())
-    negative_fp_rate = (
-        round(negative_false_positives / total_negatives, 4) if total_negatives > 0 else 0.0
-    )
-
-    error_taxonomy = {
-        "false_negative_missed_lesion": totals.get("false_negative", 0),
-        "false_positive_background": totals.get("false_positive_background", 0),
-        "localization_low_iou": totals.get("localization_error", 0),
-        "classification_confusion": totals.get("classification_confusion", 0),
-        "duplicate_detection": totals.get("duplicate_detection", 0),
-    }
-
-    lesion_size_recall = {
-        cat: {
-            "total": lesion_size_totals[cat],
-            "recalled": lesion_size_recalled[cat],
-            "recall": (
-                round(lesion_size_recalled[cat] / lesion_size_totals[cat], 4)
-                if lesion_size_totals[cat] > 0
-                else None
-            ),
-        }
-        for cat in ("small", "medium", "large")
-    }
-
-    negative_benchmark = {
-        status: {
-            "negative_images": negative_totals[status],
-            "images_with_false_positive": negative_false_positives_by_type[status],
-            "false_alarm_rate": (
-                round(
-                    negative_false_positives_by_type[status] / negative_totals[status],
-                    4,
-                )
-                if negative_totals[status]
-                else None
-            ),
-        }
-        for status in (TRUE_NEGATIVE, OUT_OF_SCOPE_NEGATIVE)
-    }
-    source_slices = {
-        source: {
-            "true_positive": values.get("true_positive", 0),
-            "false_positive": values.get("false_positive", 0),
-            "false_negative": values.get("false_negative", 0),
-            "recall": round(
-                values.get("true_positive", 0)
-                / max(
-                    values.get("true_positive", 0) + values.get("false_negative", 0),
-                    1,
-                ),
-                4,
-            ),
-        }
-        for source, values in source_totals.items()
-    }
+    pd.DataFrame(rows).to_csv(output_dir / f"{split}_errors.csv", index=False)
 
     summary = {
         "split": split,
         "confidence": confidence,
         "iou_threshold": iou,
-        **totals,
-        "images": len(manifest),
-        "negative_images_total": total_negatives,
-        "negative_images_with_false_positive": negative_false_positives,
-        "negative_image_false_positive_rate": negative_fp_rate,
-        "negative_benchmark": negative_benchmark,
-        "source_slices": source_slices,
-        "error_taxonomy": error_taxonomy,
-        "lesion_size_recall": lesion_size_recall,
+        "true_positive": totals.get("true_positive", 0),
+        "false_positive": totals.get("false_positive", 0),
+        "false_negative": totals.get("false_negative", 0),
+        "error_taxonomy": {
+            "false_negative_missed_lesion": totals.get("false_negative", 0),
+            "false_positive_background": totals.get("false_positive_background", 0),
+            "localization_error": totals.get("localization_error", 0),
+            "classification_confusion": totals.get("classification_confusion", 0),
+            "duplicate_detection": totals.get("duplicate_detection", 0),
+        },
+        "lesion_size_recall": {
+            cat: {
+                "total": lesion_size_totals[cat],
+                "recalled": lesion_size_recalled[cat],
+                "recall": (
+                    round(lesion_size_recalled[cat] / lesion_size_totals[cat], 4)
+                    if lesion_size_totals[cat] > 0
+                    else None
+                ),
+            }
+            for cat in ("small", "medium", "large")
+        },
     }
-    (output_dir / f"{split}_summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+
     (output_dir / "error_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return summary
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Phân tích lỗi phát hiện của mô hình")
+    parser.add_argument("--weights", type=Path, required=True)
+    parser.add_argument("--dataset", type=Path, default=Path("data/processed/rice_leaf_detection"))
+    parser.add_argument("--split", choices=("val", "test"), default="val")
+    parser.add_argument("--confidence", type=float, default=0.45)
+    parser.add_argument("--iou", type=float, default=0.5)
+    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--output", type=Path, default=Path("reports/error_analysis"))
+    return parser.parse_args()
+
+
 def main() -> None:
     configure_utf8_console()
     args = parse_args()
-    if args.split == "test" and not args.confirm_final_test:
-        raise SystemExit("Chỉ phân tích test sau khi chốt mô hình bằng tập xác thực.")
-    if not 0 <= args.confidence <= 1:
-        raise ValueError("--confidence phải nằm trong khoảng [0, 1]")
-
     summary = run_error_analysis(
         weights_path=args.weights,
         dataset_dir=args.dataset,

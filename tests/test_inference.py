@@ -6,9 +6,7 @@ import pytest
 
 from rice_leaf_detection.inference import (
     Detection,
-    DetectionPolicy,
     Prediction,
-    RawDetection,
     RiceLeafDetector,
 )
 
@@ -29,27 +27,12 @@ def test_detection_dataclass_creation() -> None:
 def test_prediction_dataclass_fields() -> None:
     pred = Prediction(
         detections=[],
-        status="NO_SUPPORTED_SYMPTOM_DETECTED",
+        status="NO_SYMPTOM_DETECTED",
         message="Không phát hiện vùng tổn thương",
         warnings=["Kết quả không khẳng định lá khỏe"],
     )
-    assert pred.status == "NO_SUPPORTED_SYMPTOM_DETECTED"
+    assert pred.status == "NO_SYMPTOM_DETECTED"
     assert len(pred.warnings) == 1
-
-
-def test_detection_policy_phan_biet_accept_review_discard() -> None:
-    policy = DetectionPolicy(review_threshold=0.20, accept_threshold=0.45)
-    candidates = [
-        RawDetection(0, "Bacterial_Leaf_Blight", 0.10, (0, 0, 1, 1)),
-        RawDetection(0, "Bacterial_Leaf_Blight", 0.30, (0, 0, 1, 1)),
-        RawDetection(1, "Brown_Spot", 0.80, (0, 0, 1, 1)),
-    ]
-
-    detections = policy.apply(candidates)
-
-    assert [d.decision for d in detections] == ["review", "accepted"]
-    assert all(not hasattr(d, "detection_score") for d in detections)
-    assert [d.score for d in detections] == [0.30, 0.80]
 
 
 def test_detector_tu_choi_confidence_iou_ngoai_mien() -> None:

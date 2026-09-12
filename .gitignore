@@ -16,14 +16,13 @@ env/
 # Caches and build outputs
 .pytest_cache/
 .pytest_temp/
+.pytest_tmp/
 tmp_test/
 .ruff_cache/
 Ultralytics/
 *.egg-info/
 build/
 dist/
-docs/_guide_render/
-docs/*_a11y.json
 
 
 # Data, model weights, and experiment runs

@@ -19,7 +19,7 @@ training:
   optimizer: AdamW
   learning_rate: 0.001
   weight_decay: 0.0005
-  # Augmentation chỉ chạy trên train; val/test dùng preprocessing tất định.
+  # Augmentation chỉ áp dụng khi huấn luyện (Train-only)
   hsv_h: 0.005
   hsv_s: 0.25
   hsv_v: 0.20
@@ -33,11 +33,5 @@ training:
   close_mosaic: 10
 
 inference:
-  # Ngưỡng thấp nhất để lấy candidate; không phải ngưỡng kết luận bệnh.
-  candidate_confidence: 0.20
+  confidence: 0.45
   iou: 0.45
-
-policy:
-  # Hai giá trị này phải được tune trên Validation trước khi release.
-  review_threshold: 0.20
-  accept_threshold: 0.45

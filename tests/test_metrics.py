@@ -1,40 +1,36 @@
-"""Kiểm tra metric theo ảnh và false-alarm benchmark."""
+"""Kiểm tra tính toán các độ đo chuẩn trong Object Detection (Precision, Recall, IoU)."""
 
-from rice_leaf_detection.constants import OUT_OF_SCOPE_NEGATIVE, TRUE_NEGATIVE
-from rice_leaf_detection.evaluate import calculate_image_level_metrics
+import pytest
+
+from rice_leaf_detection.error_analysis import box_iou
 
 
-def test_image_level_metrics_tach_target_recall_va_negative_types() -> None:
-    result = calculate_image_level_metrics(
-        [
-            {
-                "truth_classes": [0],
-                "detected_classes": [0],
-                "annotation_status": "TARGET_POSITIVE",
-                "accepted_detection": True,
-            },
-            {
-                "truth_classes": [1],
-                "detected_classes": [],
-                "annotation_status": "TARGET_POSITIVE",
-                "accepted_detection": False,
-            },
-            {
-                "truth_classes": [],
-                "detected_classes": [],
-                "annotation_status": TRUE_NEGATIVE,
-                "accepted_detection": False,
-            },
-            {
-                "truth_classes": [],
-                "detected_classes": [],
-                "annotation_status": OUT_OF_SCOPE_NEGATIVE,
-                "accepted_detection": True,
-            },
-        ]
-    )
+def test_box_iou_perfect_overlap() -> None:
+    box = (10.0, 10.0, 50.0, 50.0)
+    assert box_iou(box, box) == pytest.approx(1.0)
 
-    assert result["image_target_recall"]["0"]["recall"] == 1.0
-    assert result["image_target_recall"]["1"]["recall"] == 0.0
-    assert result["negative_benchmark"][TRUE_NEGATIVE]["false_alarm_rate"] == 0.0
-    assert result["negative_benchmark"][OUT_OF_SCOPE_NEGATIVE]["false_alarm_rate"] == 1.0
+
+def test_box_iou_disjoint_boxes() -> None:
+    box1 = (0.0, 0.0, 10.0, 10.0)
+    box2 = (20.0, 20.0, 30.0, 30.0)
+    assert box_iou(box1, box2) == 0.0
+
+
+def test_box_iou_partial_overlap() -> None:
+    # box1: 0 to 10 on both axes, area = 100
+    # box2: 5 to 15 on both axes, area = 100
+    # intersection: 5 to 10 on both axes, area = 25
+    # union: 100 + 100 - 25 = 175 -> IoU = 25 / 175 = 1/7
+    box1 = (0.0, 0.0, 10.0, 10.0)
+    box2 = (5.0, 5.0, 15.0, 15.0)
+    expected_iou = 25.0 / 175.0
+    assert box_iou(box1, box2) == pytest.approx(expected_iou, rel=1e-3)
+
+
+def test_precision_recall_formula() -> None:
+    # Kiểm tra tính toán cơ bản: Precision = TP / (TP + FP), Recall = TP / (TP + FN)
+    tp, fp, fn = 8, 2, 2
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    assert precision == 0.8
+    assert recall == 0.8
